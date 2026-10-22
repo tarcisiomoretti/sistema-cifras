@@ -18,5 +18,5 @@
  * O app key NÃO é segredo: ele só identifica qual aplicativo pede acesso.
  */
 window.CIFRAS_CONFIG = {
-  DROPBOX_APP_KEY: ''
+  DROPBOX_APP_KEY: '6qmiez11xm1wcci'
 };
