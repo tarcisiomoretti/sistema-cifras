@@ -1,6 +1,6 @@
 /* Service worker do Sistema de Cifras.
    Aumente CACHE_VERSION sempre que publicar uma versão nova. */
-const CACHE_VERSION = 'cifras-v5';
+const CACHE_VERSION = 'cifras-v6';
 const APP_SHELL = [
   './',
   './index.html',
@@ -14,12 +14,15 @@ const APP_SHELL = [
   './vendor/jszip.min.js',
   './vendor/pdf-lib.min.js',
   './vendor/dropbox-sdk.min.js',
-  './config.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',
   './icons/icon-180.png'
 ];
+
+/* Arquivos que devem ser buscados na rede primeiro (podem mudar sem trocar a versão):
+   config.js guarda o App key do Dropbox. */
+const NETWORK_FIRST = ['./config.js'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -56,6 +59,23 @@ self.addEventListener('fetch', (event) => {
           return response;
         })
         .catch(() => caches.match('./index.html'))
+    );
+    return;
+  }
+
+  // Configuração: sempre tenta a rede primeiro, para pegar o App key atualizado.
+  const isNetworkFirst = NETWORK_FIRST.some((asset) => url.pathname.endsWith(asset.slice(1)));
+  if (isNetworkFirst) {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          if (response && response.ok) {
+            const copy = response.clone();
+            caches.open(CACHE_VERSION).then((cache) => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => caches.match(request))
     );
     return;
   }
