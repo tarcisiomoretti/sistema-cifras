@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Cifras</title>
+  <meta name="description" content="Biblioteca de cifras offline para igreja: PDFs, DOCX, repertórios e modo palco.">
+  <meta name="theme-color" content="#f6f4ef" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#161412" media="(prefers-color-scheme: dark)">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cifras">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="apple-touch-icon" href="./icons/icon-180.png">
+  <link rel="icon" href="./icons/icon-192.png" sizes="192x192">
+  <link rel="stylesheet" href="./styles.css">
+  <script src="./theme-init.js"></script>
+</head>
+<body>
+  <header>
+    <div class="header-top">
+      <h1>Cifras <span class="count" id="count"></span></h1>
+      <button id="installBtn" class="primary" hidden>Instalar</button>
+      <button id="themeBtn" class="icon-btn" title="Alternar tema" aria-label="Alternar tema claro/escuro">◐</button>
+    </div>
+    <div class="tabs" role="tablist" aria-label="Seções">
+      <button id="tabLibrary" class="tab on" role="tab" aria-selected="true">Biblioteca</button>
+      <button id="tabLists" class="tab" role="tab" aria-selected="false">Repertórios</button>
+    </div>
+    <div id="searchWrap">
+      <input type="search" id="search" placeholder="Buscar por nome, artista, tom, etiqueta ou letra…" autocomplete="off" aria-label="Buscar cifras">
+    </div>
+  </header>
+
+  <main id="main"></main>
+
+  <section class="viewer" id="viewer" aria-label="Visualizador de cifra" aria-hidden="true">
+    <div class="viewer-bar">
+      <button id="closeViewer" title="Fechar" aria-label="Fechar visualizador">✕</button>
+      <span class="title" id="viewerTitle"></span>
+      <button id="prevSong" title="Música anterior (seta esquerda)" aria-label="Música anterior">◀</button>
+      <button id="nextSong" title="Próxima música (seta direita)" aria-label="Próxima música">▶</button>
+      <button id="zoomOut" title="Diminuir zoom" aria-label="Diminuir zoom">−</button>
+      <button id="zoomIn" title="Aumentar zoom" aria-label="Aumentar zoom">+</button>
+      <button id="invertBtn" title="Inverter cores" aria-label="Inverter cores">◐</button>
+      <button id="downloadBtn" title="Baixar o arquivo original"><span class="label">✎ Abrir</span></button>
+      <button id="shareBtn" title="Compartilhar o arquivo"><span class="label">⤴ Compartilhar</span></button>
+    </div>
+    <div id="viewerBody"></div>
+  </section>
+
+  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-hidden="true">
+    <div class="modal-box" id="modalBody"></div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+  <div class="progress" id="progress" hidden>
+    <div class="progress-text" id="progressText" role="status" aria-live="polite"></div>
+    <div class="progress-track"><div id="progressBar"></div></div>
+  </div>
+
+  <input type="file" id="fileInput" multiple accept=".pdf,.doc,.docx" hidden>
+
+  <script src="./vendor/pdf.min.js"></script>
+  <script src="./vendor/mammoth.browser.min.js"></script>
+  <script src="./vendor/jszip.min.js"></script>
+  <script src="./vendor/pdf-lib.min.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

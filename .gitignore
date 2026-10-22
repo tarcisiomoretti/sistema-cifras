@@ -1,0 +1,13 @@
+# Sistema de arquivos
+.DS_Store
+Thumbs.db
+
+# Arquivos de teste locais
+.smoke-fixtures/
+.smoke-downloads/
+smoke-test.html
+
+# Editores
+.vscode/
+.idea/
+*.swp
