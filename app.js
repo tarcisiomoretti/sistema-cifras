@@ -59,6 +59,15 @@ let currentBlob = null;
 let currentBlobSongId = null;
 let pendingExport = null; // { kind, filename, blob } pronto para compartilhar/baixar
 
+/* ---------- nuvem (Dropbox) ---------- */
+const CLOUD_KEY = 'cifras-cloud';   // configuração local: pasta escolhida, conta
+const META_FILENAME = '_cifras-meta.json';
+let cloudCfg = null;                // { folderPath, folderName, accountName, accountEmail }
+let cloudAuth = null;               // instância Dropbox.DropboxAuth
+let cloudDbx = null;                // instância Dropbox.Dropbox autenticada
+let cloudSyncing = false;
+let cloudPending = 0;               // arquivos importados que ainda não subiram
+
 /* ---------- utilidades ---------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
@@ -422,6 +431,454 @@ async function loadAll() {
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.name.localeCompare(b.name, 'pt'));
 
   if (openList && !listById(openList)) openList = null;
+}
+
+/* ============================================================
+   Nuvem: Dropbox (login PKCE, pasta base e sincronização manual)
+   ============================================================ */
+function cloudConfigured() {
+  return Boolean(window.CIFRAS_CONFIG && window.CIFRAS_CONFIG.DROPBOX_APP_KEY);
+}
+
+function redirectUri() {
+  // Sempre o endereço atual sem query/hash, para casar com o cadastrado no Dropbox.
+  return window.location.origin + window.location.pathname;
+}
+
+function loadCloudCfg() {
+  try {
+    const raw = localStorage.getItem(CLOUD_KEY);
+    cloudCfg = raw ? JSON.parse(raw) : null;
+  } catch (err) {
+    cloudCfg = null;
+  }
+  return cloudCfg;
+}
+
+function saveCloudCfg() {
+  try {
+    if (cloudCfg) localStorage.setItem(CLOUD_KEY, JSON.stringify(cloudCfg));
+    else localStorage.removeItem(CLOUD_KEY);
+  } catch (err) {
+    /* armazenamento cheio ou bloqueado: segue só em memória */
+  }
+}
+
+function clearCloudAuth() {
+  cloudAuth = null;
+  cloudDbx = null;
+  if (cloudCfg) {
+    delete cloudCfg.accountName;
+    delete cloudCfg.accountEmail;
+    saveCloudCfg();
+  }
+}
+
+/* O refresh token fica em sessionStorage: sobrevive a recargas na mesma aba,
+   mas não é gravado de forma permanente no repositório nem exposto na URL. */
+const REFRESH_KEY = 'cifras-cloud-refresh';
+const VERIFIER_KEY = 'cifras-cloud-verifier';
+
+function cloudSdkReady() {
+  return Boolean(window.Dropbox && window.Dropbox.DropboxAuth);
+}
+
+async function cloudGetAuth() {
+  if (!cloudSdkReady()) throw new Error('SDK do Dropbox não carregou. Recarregue a página.');
+  if (cloudAuth) return cloudAuth;
+
+  const appKey = window.CIFRAS_CONFIG.DROPBOX_APP_KEY;
+  cloudAuth = new window.Dropbox.DropboxAuth({ clientId: appKey });
+
+  const stored = sessionStorage.getItem(REFRESH_KEY);
+  if (stored) cloudAuth.setRefreshToken(stored);
+
+  return cloudAuth;
+}
+
+async function cloudConnect() {
+  if (!cloudConfigured()) {
+    toast('Falta configurar o App key do Dropbox.', 'error');
+    return;
+  }
+  try {
+    const auth = await cloudGetAuth();
+    const url = await auth.getAuthenticationUrl(
+      redirectUri(), undefined, 'code', 'offline', undefined, undefined, true
+    );
+    sessionStorage.setItem(VERIFIER_KEY, auth.getCodeVerifier());
+    window.location.href = url;
+  } catch (err) {
+    console.error('Falha ao iniciar o login do Dropbox', err);
+    toast('Não foi possível abrir o login do Dropbox.', 'error');
+  }
+}
+
+async function cloudFinishLoginIfNeeded() {
+  const params = new URLSearchParams(window.location.search);
+  const code = params.get('code');
+  if (!code) return false;
+
+  // Limpa o ?code= da barra de endereço imediatamente, por segurança.
+  window.history.replaceState({}, document.title, redirectUri());
+
+  if (!cloudConfigured() || !cloudSdkReady()) return false;
+
+  try {
+    const auth = await cloudGetAuth();
+    const verifier = sessionStorage.getItem(VERIFIER_KEY);
+    if (verifier) auth.setCodeVerifier(verifier);
+    sessionStorage.removeItem(VERIFIER_KEY);
+
+    const result = await auth.getAccessTokenFromCode(redirectUri(), code);
+    const body = result.result || result;
+    if (body.refresh_token) sessionStorage.setItem(REFRESH_KEY, body.refresh_token);
+    auth.setAccessToken(body.access_token);
+
+    const dbx = new window.Dropbox.Dropbox({ auth });
+    const account = (await dbx.usersGetCurrentAccount()).result;
+    loadCloudCfg();
+    cloudCfg = cloudCfg || {};
+    cloudCfg.accountName = account.name && account.name.display_name;
+    cloudCfg.accountEmail = account.email;
+    saveCloudCfg();
+
+    toast('Conectado como ' + (cloudCfg.accountName || cloudCfg.accountEmail || 'conta Dropbox') + '.');
+    return true;
+  } catch (err) {
+    console.error('Falha ao concluir o login do Dropbox', err);
+    toast('O login do Dropbox não foi concluído. Tente de novo.', 'error');
+    return false;
+  }
+}
+
+async function cloudGetDbx() {
+  const auth = await cloudGetAuth();
+  if (cloudDbx) return cloudDbx;
+  if (!auth.getAccessToken() && !auth.getRefreshToken()) {
+    throw new Error('Entre na sua conta do Dropbox primeiro.');
+  }
+  cloudDbx = new window.Dropbox.Dropbox({ auth });
+  return cloudDbx;
+}
+
+async function cloudAccountName() {
+  try {
+    const dbx = await cloudGetDbx();
+    const account = (await dbx.usersGetCurrentAccount()).result;
+    return account.name && account.name.display_name;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function cloudListEntries(path) {
+  const dbx = await cloudGetDbx();
+  const entries = [];
+  let response = await dbx.filesListFolder({ path: path || '' });
+  entries.push(...response.result.entries);
+  while (response.result.has_more) {
+    response = await dbx.filesListFolderContinue({ cursor: response.result.cursor });
+    entries.push(...response.result.entries);
+  }
+  return entries;
+}
+
+/* ---------- tela de nuvem ---------- */
+async function openCloudModal() {
+  if (!cloudConfigured()) {
+    $('#modalBody').innerHTML = `
+      <h2 id="modalTitle">Nuvem (Dropbox)</h2>
+      <p class="export-info">
+        O login ainda não está ativo porque falta o <strong>App key</strong> do Dropbox.
+      </p>
+      <p class="export-info">
+        Para ativar: crie um app em <strong>dropbox.com/developers/apps</strong> (Scoped access, Full Dropbox),
+        adicione o endereço deste app como Redirect URI e cole o App key no arquivo
+        <code>config.js</code>. O passo a passo completo está no documento do projeto, seção 12.3.
+      </p>
+      <div class="modal-actions"><button data-act="cancel-export">Fechar</button></div>
+    `;
+    showModal();
+    return;
+  }
+
+  loadCloudCfg();
+  const connected = Boolean(sessionStorage.getItem(REFRESH_KEY));
+  const hasFolder = Boolean(cloudCfg) && typeof cloudCfg.folderPath === 'string';
+  const folder = hasFolder ? (cloudCfg.folderPath || '(raiz do Dropbox)') : '';
+
+  $('#modalBody').innerHTML = `
+    <h2 id="modalTitle">Nuvem (Dropbox)</h2>
+    ${connected
+      ? `<p class="export-info">Conectado${cloudCfg && cloudCfg.accountEmail ? ' como ' + esc(cloudCfg.accountEmail) : ''}.</p>`
+      : `<p class="export-info">Entre na conta do Dropbox para escolher a pasta das cifras e sincronizar.</p>`}
+    ${hasFolder
+      ? `<p class="export-info">Pasta base: <strong>${esc(folder)}</strong></p>`
+      : ''}
+    ${cloudPending ? `<p class="export-info export-warn">${cloudPending} arquivo(s) importado(s) aguardando envio.</p>` : ''}
+    <div class="modal-actions">
+      ${connected
+        ? `<button class="primary grow" data-act="cloud-pick-folder">${hasFolder ? 'Trocar pasta' : 'Escolher pasta'}</button>`
+        : `<button class="primary grow" data-act="cloud-connect">Entrar no Dropbox</button>`}
+    </div>
+    <div class="modal-actions">
+      <button data-act="cloud-sync" ${connected && hasFolder ? '' : 'disabled'}>Sincronizar agora</button>
+      ${connected ? `<button data-act="cloud-disconnect">Sair</button>` : ''}
+      <button data-act="cancel-export">Fechar</button>
+    </div>
+  `;
+  showModal();
+}
+
+async function cloudPickFolder() {
+  try {
+    setProgress(0.1, 'Lendo pastas do Dropbox…');
+    const entries = await cloudListEntries('');
+    const folders = entries.filter((entry) => entry['.tag'] === 'folder');
+    setProgress(null);
+
+    $('#modalBody').insertAdjacentHTML('beforeend', `
+      <div class="cloud-folders">
+        <p class="export-info">Escolha a pasta onde ficam as cifras:</p>
+        <button class="cloud-folder" data-folder="" data-name="(raiz)">/ (raiz do Dropbox)</button>
+        ${folders.map((folder) => `
+          <button class="cloud-folder" data-folder="${esc(folder.path_lower)}" data-name="${esc(folder.name)}">
+            📁 ${esc(folder.name)}
+          </button>
+        `).join('')}
+      </div>
+    `);
+
+    $$('.cloud-folder').forEach((button) => {
+      button.addEventListener('click', () => {
+        loadCloudCfg();
+        cloudCfg = cloudCfg || {};
+        cloudCfg.folderPath = button.dataset.folder;
+        cloudCfg.folderName = button.dataset.name;
+        saveCloudCfg();
+        toast('Pasta escolhida: ' + button.dataset.name);
+        openCloudModal();
+      });
+    });
+  } catch (err) {
+    setProgress(null);
+    console.error('Falha ao listar pastas', err);
+    toast('Não foi possível listar as pastas do Dropbox.', 'error');
+  }
+}
+
+async function cloudSignOut() {
+  clearCloudAuth();
+  sessionStorage.removeItem(REFRESH_KEY);
+  sessionStorage.removeItem(VERIFIER_KEY);
+  cloudDbx = null;
+  toast('Desconectado do Dropbox.');
+  closeModal();
+}
+
+function downloadPathFor(entry) {
+  // path_display começa com "/"; o endpoint de download aceita o caminho como está.
+  return entry.path_lower || entry.path_display;
+}
+
+async function cloudSync() {
+  if (cloudSyncing) {
+    toast('A sincronização já está em andamento.', 'error');
+    return;
+  }
+  loadCloudCfg();
+  if (!cloudCfg || typeof cloudCfg.folderPath !== 'string') {
+    toast('Escolha a pasta base primeiro.', 'error');
+    return;
+  }
+
+  cloudSyncing = true;
+  const folder = cloudCfg.folderPath;
+  const localByPath = new Map();
+  songs.forEach((song) => { if (song.cloudPath) localByPath.set(song.cloudPath, song); });
+
+  let added = 0;
+  let updated = 0;
+  let failed = 0;
+  let index = 0;
+
+  try {
+    const entries = await cloudListEntries(folder);
+    const files = entries.filter((entry) => entry['.tag'] === 'file' && /\.(pdf|docx?)$/i.test(entry.name));
+    const total = files.length || 1;
+
+    for (const entry of files) {
+      index++;
+      setProgress(index / total * 0.95, 'Sincronizando ' + index + ' de ' + files.length + ': ' + entry.name);
+      const path = downloadPathFor(entry);
+      const local = localByPath.get(path);
+      const remoteRev = entry.rev;
+
+      // Já temos e a versão é a mesma: não baixa de novo.
+      if (local && local.cloudRev === remoteRev) continue;
+
+      const existing = songs.find((song) => song.name === entry.name && !song.cloudPath);
+      if (local || existing) {
+        // Conteúdo mudou na nuvem: baixa a versão nova.
+      }
+
+      try {
+        const response = await cloudGetDbx().then((dbx) => dbx.filesDownload({ path }));
+        const blob = response.result.fileBlob;
+        const buffer = await blob.arrayBuffer();
+        const text = await extractText({ name: entry.name }, buffer.slice(0));
+        const song = local || existing || { id: uid(), name: entry.name };
+        song.name = entry.name;
+        song.type = /\.pdf$/i.test(entry.name) ? 'pdf' : 'doc';
+        song.size = blob.size;
+        song.addedAt = song.addedAt || Date.now();
+        song.updatedAt = Date.now();
+        song.cloudPath = path;
+        song.cloudRev = remoteRev;
+        song.text = text;
+        song.hash = await sha256(buffer.slice(0));
+        buildHay(song);
+        await saveSongRecord(song, blob, text);
+        await saveMeta(song);
+        if (!mem.songs.has(song.id)) {
+          songs.push(song);
+          mem.songs.set(song.id, song);
+        }
+        if (local) updated++; else added++;
+      } catch (err) {
+        failed++;
+        console.warn('Falha ao baixar ' + entry.name, err);
+      }
+    }
+
+    setProgress(0.97, 'Lendo metadados…');
+    await cloudPullMeta();
+    await cloudPushImports();
+    await cloudPushMeta();
+    await loadAll();
+    render();
+
+    closeModal();
+    const parts = [];
+    if (added) parts.push(added + ' nova(s)');
+    if (updated) parts.push(updated + ' atualizada(s)');
+    if (failed) parts.push(failed + ' com erro');
+    toast(parts.length ? 'Sincronizado: ' + parts.join(', ') + '.' : 'Tudo já estava em dia.');
+  } catch (err) {
+    console.error('Falha na sincronização', err);
+    toast(err && err.message ? err.message : 'A sincronização falhou.', 'error');
+  } finally {
+    cloudSyncing = false;
+    setProgress(null);
+  }
+}
+
+/* Envia para a nuvem os arquivos que foram importados no aparelho. */
+async function cloudPushImports() {
+  const pending = songs.filter((song) => !song.cloudPath);
+  for (const song of pending) {
+    try {
+      const record = await getOne('files', song.id);
+      if (!record || !record.blob) continue;
+      const target = (cloudCfg.folderPath ? cloudCfg.folderPath + '/' : '/') + song.name;
+      const result = await cloudGetDbx().then((dbx) => dbx.filesUpload({
+        path: target,
+        contents: record.blob,
+        mode: { '.tag': 'overwrite' },
+        autorename: true,
+        mute: true
+      }));
+      song.cloudPath = result.result.path_lower;
+      song.cloudRev = result.result.rev;
+      await saveMeta(song);
+      cloudPending = Math.max(0, cloudPending - 1);
+    } catch (err) {
+      console.warn('Falha ao enviar ' + song.name, err);
+    }
+  }
+}
+
+/* Baixa/metadata: as etiquetas e repertórios ficam em _cifras-meta.json. */
+async function cloudPullMeta() {
+  try {
+    const path = (cloudCfg.folderPath ? cloudCfg.folderPath + '/' : '/') + META_FILENAME;
+    const response = await cloudGetDbx().then((dbx) => dbx.filesDownload({ path }));
+    const text = await response.result.fileBlob.text();
+    const remote = JSON.parse(text);
+
+    if (Array.isArray(remote.lists)) {
+      for (const remoteList of remote.lists) {
+        const local = listById(remoteList.id);
+        if (!local) {
+          const list = { ...remoteList, items: remoteList.items || [] };
+          lists.push(list);
+          mem.lists.set(list.id, list);
+          await putOne('lists', list);
+        } else if ((remoteList.updatedAt || 0) > (local.updatedAt || 0)) {
+          const merged = { ...local, ...remoteList, items: remoteList.items || local.items };
+          const position = lists.findIndex((item) => item.id === merged.id);
+          lists[position] = merged;
+          mem.lists.set(merged.id, merged);
+          await putOne('lists', merged);
+        }
+      }
+    }
+
+    (remote.songs || []).forEach((remoteSong) => {
+      const local = songById(remoteSong.id) || songs.find((song) => song.cloudPath === remoteSong.cloudPath);
+      if (!local) return;
+      if ((remoteSong.updatedAt || 0) > (local.updatedAt || 0)) {
+        ['artist', 'key', 'tags', 'favorite', 'notes'].forEach((field) => {
+          if (remoteSong[field] !== undefined) local[field] = remoteSong[field];
+        });
+        local.updatedAt = remoteSong.updatedAt;
+        saveMeta(local);
+      }
+    });
+  } catch (err) {
+    // Arquivo ainda não existe na primeira sincronização: não é erro.
+    if (!err || !/not_found/i.test(String(err.error && err.error.error_summary || err.message || err))) {
+      console.warn('Metadados não puderam ser lidos', err);
+    }
+  }
+}
+
+async function cloudPushMeta() {
+  try {
+    const payload = {
+      version: 1,
+      updatedAt: Date.now(),
+      songs: songs.map((song) => ({
+        id: song.id,
+        name: song.name,
+        cloudPath: song.cloudPath || null,
+        artist: song.artist || '',
+        key: song.key || '',
+        tags: song.tags || [],
+        favorite: Boolean(song.favorite),
+        notes: song.notes || '',
+        updatedAt: song.updatedAt || song.addedAt || 0
+      })),
+      lists: lists.map((list) => ({
+        id: list.id,
+        name: list.name,
+        items: list.items || [],
+        createdAt: list.createdAt || 0,
+        updatedAt: list.updatedAt || list.createdAt || 0
+      }))
+    };
+    const path = (cloudCfg.folderPath ? cloudCfg.folderPath + '/' : '/') + META_FILENAME;
+    await cloudGetDbx().then((dbx) => dbx.filesUpload({
+      path,
+      contents: JSON.stringify(payload),
+      mode: { '.tag': 'overwrite' },
+      autorename: false,
+      mute: true
+    }));
+  } catch (err) {
+    console.warn('Metadados não puderam ser gravados', err);
+  }
 }
 
 /* ============================================================
@@ -1930,6 +2387,26 @@ function bindEvents() {
         }
       } else if (action === 'cancel-export') {
         closeModal();
+      } else if (action === 'open-cloud') {
+        await openCloudModal();
+      } else if (action === 'cloud-connect') {
+        await cloudConnect();
+      } else if (action === 'cloud-pick-folder') {
+        await cloudPickFolder();
+      } else if (action === 'cloud-sync') {
+        await cloudSync();
+      } else if (action === 'cloud-disconnect') {
+        await cloudSignOut();
+      } else if (action === 'open-cloud') {
+        await openCloudModal();
+      } else if (action === 'cloud-connect') {
+        await cloudConnect();
+      } else if (action === 'cloud-pick-folder') {
+        await cloudPickFolder();
+      } else if (action === 'cloud-sync') {
+        await cloudSync();
+      } else if (action === 'cloud-disconnect') {
+        await cloudSignOut();
       }
     } catch (err) {
       console.error(err);
@@ -2005,6 +2482,11 @@ function bindEvents() {
     $('#installBtn').hidden = true;
     toast('App instalado.');
   });
+
+  const cloudBtn = $('#cloudBtn');
+  if (cloudBtn) {
+    cloudBtn.addEventListener('click', () => openCloudModal());
+  }
 }
 
 /* ============================================================
@@ -2049,6 +2531,18 @@ async function init() {
 
   render();
   registerServiceWorker();
+
+  // Se o Dropbox acabou de devolver o login, conclui e atualiza a tela.
+  try {
+    const loggedIn = await cloudFinishLoginIfNeeded();
+    if (loggedIn) {
+      loadCloudCfg();
+      render();
+      await openCloudModal();
+    }
+  } catch (err) {
+    console.warn('Login do Dropbox não pôde ser concluído.', err);
+  }
 
   if (location.protocol === 'file:') {
     toast('Para instalar como app e funcionar offline, abra por um endereço http(s).', 'error');

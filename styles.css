@@ -166,6 +166,17 @@ main {
   border-top: 1px solid var(--ln);
   font: 600 15px system-ui, sans-serif;
 }
+.cloud-folders { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: auto; }
+.cloud-folder {
+  text-align: left;
+  padding: 12px 14px;
+  border: 1px solid var(--ln);
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 15px;
+}
+.cloud-folder:hover { background: var(--hl, rgba(0,0,0,0.05)); }
 
 /* ---------- visualizador ---------- */
 .viewer {

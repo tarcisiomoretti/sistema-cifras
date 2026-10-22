@@ -1,6 +1,6 @@
 /* Service worker do Sistema de Cifras.
    Aumente CACHE_VERSION sempre que publicar uma versão nova. */
-const CACHE_VERSION = 'cifras-v3';
+const CACHE_VERSION = 'cifras-v4';
 const APP_SHELL = [
   './',
   './index.html',
@@ -13,6 +13,8 @@ const APP_SHELL = [
   './vendor/mammoth.browser.min.js',
   './vendor/jszip.min.js',
   './vendor/pdf-lib.min.js',
+  './vendor/dropbox-sdk.min.js',
+  './config.js',
   './icons/icon-192.png',
   './icons/icon-512.png',
   './icons/maskable-512.png',

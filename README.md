@@ -11,6 +11,7 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 - Etiquetas, favoritas e edição de nome/artista/tom.
 - Repertórios com adicionar, reordenar, remover e tocar em sequência.
 - Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF, para baixar ou compartilhar.
+- **Nuvem (Dropbox)**: entrar na conta, escolher a pasta das cifras e sincronizar quando quiser (arquivos + etiquetas e repertórios).
 - Modo palco com PDF renderizado sob demanda, zoom, fundo invertido, troca de música e atalhos de teclado.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.
 - Tema claro/escuro salvo.
@@ -48,10 +49,14 @@ theme-init.js            tema aplicado antes da primeira pintura
 sw.js                    service worker (cache offline)
 manifest.webmanifest     manifesto do PWA
 icons/                   ícones do app
-vendor/                  pdf.js 3.11.174, mammoth 1.6.0, JSZip 3.10.1 e pdf-lib 1.17.1, com licenças
+vendor/                  pdf.js 3.11.174, mammoth 1.6.0, JSZip 3.10.1, pdf-lib 1.17.1 e Dropbox SDK 10.47.0, com licenças
 ```
 
-Não há build nem dependências de CDN. As bibliotecas de PDF, DOCX, zip e junção de PDFs são servidas da própria pasta.
+Não há build nem dependências de CDN. As bibliotecas de PDF, DOCX, zip, junção de PDFs e nuvem são servidas da própria pasta.
+
+### Nuvem (Dropbox)
+
+O botão ☁ abre a tela de nuvem. O login só aparece depois de preencher o **App key** em `config.js` — o passo a passo está no documento do projeto (seção 12.3) e também no próprio `config.js`. O App key não é segredo; nenhum token é guardado no repositório.
 
 ## Dados
 
@@ -100,3 +105,4 @@ Ainda falta o teste real no tablet e no iPhone, principalmente o fluxo de ediç�
 - mammoth.js — BSD 2-Clause (`vendor/LICENSE-mammoth.txt`).
 - JSZip — MIT ou GPLv3, à escolha; usamos MIT (`vendor/LICENSE-jszip.txt`).
 - pdf-lib — MIT (`vendor/LICENSE-pdflib.txt`).
+- Dropbox JavaScript SDK — MIT (`vendor/LICENSE-dropbox.txt`).

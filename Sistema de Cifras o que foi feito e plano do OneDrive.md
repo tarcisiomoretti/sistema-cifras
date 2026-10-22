@@ -420,3 +420,132 @@ A sugestão inicial é **baixar a pasta inteira**, porque o uso principal é off
 - Ao apagar uma cifra no app, criar lápide só nos metadados e manter o arquivo no OneDrive?
 - Se o arquivo sumir do OneDrive, remover a cifra da biblioteca ou deixá-la como “arquivo ausente”?
 - Usar uma pasta compartilhada da banda ou continuar com zip/PDF para os outros músicos?
+
+---
+
+## 12. Nuvem: decisão pelo Dropbox (substitui o OneDrive)
+
+Esta seção substitui a etapa 2 do OneDrive. O desenho de sincronização é **o mesmo**; muda o provedor e os detalhes de login. O documento da seção 11 fica como referência caso haja vontade de voltar ao OneDrive depois.
+
+### 12.1 Por que o Dropbox
+
+Comparação feita em outubro de 2026, para o caso de uso real (uma pessoa administra, a banda acessa):
+
+| Critério | OneDrive (Graph) | Google Drive | **Dropbox** |
+|---|---|---|---|
+| Login em app sem servidor | PKCE (MSAL.js) | Exige client secret — não há onde esconder num site público | **PKCE oficial, sem secret** |
+| Aprovação/revisão do provedor | Sim, para escopos amplos | **Sempre**, com verificação do Google (semanas) | **Não**, se ficar em modo desenvolvimento |
+| Limite de usuários conectados | — | — | **500** (muito acima do necessário) |
+| Biblioteca oficial no navegador | MSAL.js | Google Identity Services | **SDK oficial com PKCE embutido** |
+| Complexidade de configuração | Média (Entra ID) | Alta | **Baixa (App Console, poucos campos)** |
+| Já é usado hoje | OneSync sincroniza a pasta | Não | Não |
+
+O ponto decisivo: **o Dropbox permite o fluxo PKCE sem segredo de cliente e sem passar por revisão de produção**, desde que o número de usuários conectados fique abaixo de 500 — o que é folgado para o caso. No Google, um app de página única sem servidor **não tem onde guardar o secret** que a plataforma exige, e a verificação de app é um processo longo. No OneDrive o caminho existe, mas o cadastro no Entra ID é mais chato e você relatou travamento nele.
+
+### 12.2 Segurança: o que pode e o que não pode ficar no código
+
+| Item | Pode ficar no código (repositório público)? |
+|---|---|
+| App key / client ID | **Sim** — é público por definição |
+| URI de redirecionamento | **Sim** — é o endereço público do app |
+| App secret | **Não** — e não será usado (PKCE não tem secret) |
+| Access token / refresh token | **Não** — ficam apenas no aparelho, nunca no repositório |
+| Nome/ID da pasta pessoal | **Não** — escolhido em tempo de execução, guardado só no aparelho |
+| Cifras e PDFs | **Não** — nunca saem do aparelho nem da nuvem do usuário |
+
+Regra adicional: **nunca imprimir token no console**, nem em mensagem de erro.
+
+### 12.3 Configuração única no Dropbox (o usuário faz, com passo a passo)
+
+1. Acessar **https://www.dropbox.com/developers/apps** logado na conta que tem a pasta de cifras.
+2. **Create app** → **Scoped access**.
+3. Tipo de acesso: **Full Dropbox** (precisa enxergar a pasta que já existe; o modo “App folder” só veria uma pasta nova e vazia).
+4. Nome do app: `Sistema de Cifras`.
+5. Copiar o **App key** (é o client ID; não é segredo).
+6. Na aba **Permissions**, marcar e **Submit**:
+   - `account_info.read`
+   - `files.metadata.read`
+   - `files.content.read`
+   - `files.content.write`
+7. Na aba **Settings → OAuth 2 → Redirect URIs**, adicionar exatamente:
+   ```
+   https://tarcisiomoretti.github.io/sistema-cifras/
+   ```
+8. Copiar o **App key** e entregar para colar no app.
+
+Notas importantes:
+- O app fica em **development status**: funciona normalmente para até 500 usuários conectados, **sem revisão**.
+- Alterar escopos depois **não** afeta quem já autorizou; cada usuário precisa autorizar de novo. Por isso, marcar todos os escopos necessários **de uma vez**.
+- O **App secret** existe na tela, mas **não será usado**. Não colar em lugar nenhum.
+
+### 12.4 Fluxo de login no app (PKCE)
+
+1. O app gera um `code_verifier` aleatório e um `code_challenge` (SHA-256) usando a Web Crypto API.
+2. O app abre a tela de autorização do Dropbox com o `code_challenge`.
+3. O usuário entra na conta e autoriza.
+4. O Dropbox devolve para o endereço do app um `code`.
+5. O app troca o `code` + `code_verifier` por tokens, **sem enviar secret**.
+6. O app guarda o **refresh token** (longa duração) e usa o access token (~4 horas), renovando sozinho quando expira.
+
+Esse fluxo exige contexto seguro (HTTPS), que o GitHub Pages já fornece. O SDK oficial faz essa dança sozinho quando passado `usePKCE = true`.
+
+### 12.5 O que será sincronizado
+
+- **Arquivos**: PDFs e DOCX da pasta escolhida. O app lista os arquivos, baixa os que ainda não tem e envia os que foram importados no aparelho.
+- **Metadados (`_cifras-meta.json`)**: arquivo pequeno gravado na própria pasta, com nome, artista, tom, etiquetas, favoritas e repertórios (com a ordem das músicas). É a ponte entre aparelhos e a cópia de segurança da organização.
+- **Não** se sincroniza o IndexedDB: ele é interno do navegador, não portátil e não mesclável. O JSON é a fonte da parte “leve”; o IndexedDB continua sendo o banco local rápido e offline.
+
+### 12.6 Regras de sincronização
+
+- **Só manual**, disparada pelo botão **Sincronizar agora**. Nada automático ao abrir, nada em segundo plano. Isso evita competir com outros sincronizadores da pasta.
+- **Direção**: baixar novidades e enviar o que foi importado no aparelho. Nunca apagar nada na nuvem sem confirmação explícita.
+- **Conflito de metadados**: fusão campo a campo; se o mesmo campo mudou nos dois lados, vale o `updatedAt` mais recente. Exclusões viajam como “lápides” para não ressuscitar item apagado.
+- **Conflito de arquivo**: comparar o **hash de conteúdo** do Dropbox (o SDK já calcula ao enviar) antes de subir. Se o arquivo mudou na nuvem e o app tem versão antiga, o app baixa a nova em vez de sobrescrever. Se os dois mudaram, o app **mostra as duas versões e deixa o usuário escolher** — nunca decide sozinho.
+- **Identidade estável**: cada música é identificada pelo **ID do item no Dropbox**, não pelo nome. Renomear ou mover arquivo não perde etiquetas nem posição em repertório.
+- **Sessão expirada**: o app avisa e pede para entrar de novo. Sem login, tudo continua funcionando offline com o que já foi baixado.
+
+### 12.7 O cenário “todos na mesma conta”
+
+Ponto que ainda precisa ser decidido, e que muda o desenho:
+
+- **Todos usam a mesma conta** (mais simples): é preciso entrar **uma vez em cada aparelho**. O token de cada aparelho é independente e revogável no painel do Dropbox. A senha não deve circular por mensagem.
+- **Cada um com a própria conta**: o app passa a listar também “compartilhados comigo”, e a pasta é compartilhada individualmente. Mais trabalho de implementação, mas cada pessoa é dona do próprio acesso.
+
+Para o tamanho da banda, a primeira opção tende a bastar. Fica registrado como decisão em aberto.
+
+### 12.8 Cuidados
+
+- **Aprovação de produção**: se algum dia passar de 50 usuários conectados, o Dropbox abre uma janela de duas semanas para pedir aprovação de produção; se não for aprovado, a inclusão de novos usuários congela. Não se aplica ao caso atual, mas é bom saber.
+- **Nome do app trava após aprovação de produção**: escolher bem antes de qualquer pedido de revisão.
+- **Escopos retroativos**: marcar todos os escopos de uma vez, senão cada usuário precisa reautorizar depois.
+- **Pasta compartilhada**: se o usuário criar uma pasta no Dropbox Web e o app precisar enxergá-la, o modo **Full Dropbox** já cobre isso (o modo App folder não).
+- **Cota**: uploads contam para a cota do Dropbox; repertórios grandes podem falhar se a conta estiver cheia (mostrar erro claro).
+
+### 12.9 Ordem de implementação
+
+1. **Configuração no App Console** (usuário) e entrega do App key. *(falta — é o passo que destrava o login)*
+2. **Login PKCE e botões Entrar/Sair** (SDK do Dropbox em `vendor/`, sem CDN). *(feito)*
+3. **Escolha da pasta base** pelo navegador de pastas do Dropbox, guardando apenas o ID da pasta no aparelho. *(feito)*
+4. **Download inicial + delta**: arquivos aparecem na biblioteca; reindexação da busca. *(feito)*
+5. **`_cifras-meta.json`**: envio, fusão, restauração de etiquetas, favoritas e repertórios. *(feito — fusão por `updatedAt`)*
+6. **Envio dos imports do aparelho** com verificação de revisão e tratamento de conflito. *(feito — envia o que não tem `cloudPath`)*
+7. **Indicador de sincronização**: “sincronizado há X minutos”, “N pendentes”, “entrar novamente”. *(parcial — o modal mostra as pendências)*
+8. **Pasta compartilhada com a banda**, só se valer a pena depois de tudo estável.
+
+### 12.9.1 O que já está pronto no app
+
+- Botão **☁ Nuvem** no cabeçalho. Sem o App key configurado, ele mostra as instruções em vez de quebrar.
+- **Entrar/Sair** com PKCE, sem segredo de cliente. O `?code=` é retirado da barra de endereço assim que o login termina.
+- **Escolher pasta** listando as pastas do Dropbox (a pasta escolhida fica só no aparelho).
+- **Sincronizar agora**, manual: baixa os arquivos novos ou alterados (comparando a revisão), envia o que foi importado no aparelho e troca o `_cifras-meta.json`.
+- O token de atualização fica no `sessionStorage`: sobrevive a recarregamentos na mesma aba e desaparece ao fechar o navegador, exigindo novo login — comportamento conservador e seguro.
+
+> Observação de segurança: hoje o token de atualização é mantido na sessão da aba. Isso é intencional nesta primeira versão; se o login frequente incomodar no tablet, dá para passar a guardá-lo de forma persistente mais adiante, com a devida avaliação de risco.
+
+### 12.10 Decisões em aberto
+
+- Todos na mesma conta ou cada um com a própria? *(propenso a: mesma conta, login manual em cada aparelho)*
+- Baixar a pasta inteira ou só o que for aberto/marcado como offline?
+- Ao apagar uma cifra no app, manter o arquivo na nuvem e criar só a lápide nos metadados?
+- Se o arquivo sumir da nuvem, remover da biblioteca ou marcar como “arquivo ausente”?
+- Sincronizar só no botão (decidido) — vale também um lembrete automático se houver pendências ao abrir?
