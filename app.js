@@ -12,7 +12,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 const DB_NAME = 'cifras';
-const DB_VERSION = 2;
+const DB_VERSION = 3;
 const THEME_KEY = 'cifras-theme';
 const OPEN_LIST_KEY = 'cifras-open-list';
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB por arquivo
@@ -100,7 +100,8 @@ function currentSong() {
 }
 
 function subtitle(song) {
-  return [song.artist, song.type ? song.type.toUpperCase() : '', ...(song.tags || [])]
+  const onde = song.storage === 'cloud' ? 'nuvem' : '';
+  return [song.artist, song.type ? song.type.toUpperCase() : '', onde, ...(song.tags || [])]
     .filter(Boolean)
     .join(' · ');
 }
@@ -245,6 +246,9 @@ function openDB() {
       if (!database.objectStoreNames.contains('texts')) {
         database.createObjectStore('texts', { keyPath: 'id' });
       }
+      if (!database.objectStoreNames.contains('handles')) {
+        database.createObjectStore('handles');
+      }
 
       // Migração da versão 1: separa blobs e texto dos metadados.
       if (event.oldVersion === 1) {
@@ -361,19 +365,234 @@ function metaOf(song) {
   return meta;
 }
 
+/* ============================================================
+   Armazenamento de arquivos: pasta do aparelho (se escolhida) ou IndexedDB
+   ============================================================ */
+const DIR_KEY = 'cifras-dir';
+let dirHandle = null;        // FileSystemDirectoryHandle, quando o usuário escolher uma pasta
+
+function dirSupported() {
+  return typeof window.showDirectoryPicker === 'function';
+}
+
+function dirEnabled() {
+  try {
+    return localStorage.getItem(DIR_KEY) === 'sim';
+  } catch (err) {
+    return false;
+  }
+}
+
+function setDirEnabled(on) {
+  try {
+    if (on) localStorage.setItem(DIR_KEY, 'sim');
+    else localStorage.removeItem(DIR_KEY);
+  } catch (err) { /* segue em memória */ }
+}
+
+/* O handle não vai para o localStorage; tentamos guardá-lo no IndexedDB,
+   que aceita esse tipo no Chrome. No Android ele costuma não sobreviver,
+   então pedimos a pasta de novo quando necessário. */
+async function saveDirHandle(handle) {
+  try {
+    if (!db) return;
+    await tx(['handles'], 'readwrite', (stores) => req(stores[0].put(handle, 'dir')));
+  } catch (err) { /* alguns navegadores recusam guardar o handle */ }
+}
+
+async function restoreDirHandle() {
+  if (!dirEnabled() || dirHandle) return dirHandle;
+  try {
+    if (!db) return null;
+    const handle = await getOne('handles', 'dir');
+    if (!handle) return null;
+    const permission = await handle.queryPermission({ mode: 'readwrite' });
+    if (permission === 'granted') {
+      dirHandle = handle;
+      return dirHandle;
+    }
+    if (permission === 'prompt') {
+      const asked = await handle.requestPermission({ mode: 'readwrite' });
+      if (asked === 'granted') {
+        dirHandle = handle;
+        return dirHandle;
+      }
+    }
+  } catch (err) {
+    console.warn('Não foi possível revincular a pasta do aparelho.', err);
+  }
+  return null;
+}
+
+async function pickDeviceFolder() {
+  if (!dirSupported()) {
+    toast('Este navegador não deixa escolher uma pasta do aparelho.', 'error');
+    return false;
+  }
+  try {
+    dirHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+    setDirEnabled(true);
+    await saveDirHandle(dirHandle);
+    toast('Pasta escolhida: ' + dirHandle.name);
+    return true;
+  } catch (err) {
+    if (err && err.name === 'AbortError') return false;
+    console.error('Falha ao escolher a pasta', err);
+    toast('Não foi possível usar essa pasta.', 'error');
+    return false;
+  }
+}
+
+function fileSafeName(name) {
+  return String(name || 'cifra').replace(/[\\/:*?"<>|]+/g, '_').trim() || 'cifra';
+}
+
+/* Nome do arquivo no disco (pasta do aparelho). Usa o nome original com extensão. */
+function diskName(song) {
+  const base = song.file || song.name || 'cifra';
+  if (/\.(pdf|docx?)$/i.test(base)) return base;
+  const ext = song.type === 'pdf' ? '.pdf' : song.type === 'doc' ? '.docx' : '.pdf';
+  return base + ext;
+}
+
+async function writeToFolder(name, blob) {
+  if (!dirHandle) throw new Error('sem pasta');
+  const handle = await dirHandle.getFileHandle(fileSafeName(name), { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(blob);
+  await writable.close();
+}
+
+async function readFromFolder(name) {
+  if (!dirHandle) return null;
+  try {
+    const handle = await dirHandle.getFileHandle(fileSafeName(name));
+    return await handle.getFile();
+  } catch (err) {
+    return null;
+  }
+}
+
+async function removeFromFolder(name) {
+  if (!dirHandle) return;
+  try {
+    await dirHandle.removeEntry(fileSafeName(name));
+  } catch (err) { /* já não existe */ }
+}
+
+/* Guarda o arquivo no melhor lugar disponível e marca a música como baixada. */
+async function storeFile(song, blob, text) {
+  let stored = 'memory';
+  if (dirHandle) {
+    try {
+      await writeToFolder(diskName(song), blob);
+      stored = 'folder';
+    } catch (err) {
+      console.warn('Falha ao gravar na pasta, usando o armazenamento interno.', err);
+      stored = null;
+    }
+  }
+  if (stored !== 'folder') stored = 'internal';
+  song.storage = stored;
+  await saveSongRecord(song, stored === 'folder' ? null : blob, text);
+  return stored;
+}
+
+/* Lê o arquivo do melhor lugar disponível. */
+async function loadFile(song) {
+  if (song.storage === 'folder' || (dirHandle && song.storage !== 'internal')) {
+    const file = await readFromFolder(diskName(song));
+    if (file) return file;
+  }
+  const record = await getOne('files', song.id);
+  return record && record.blob ? record.blob : null;
+}
+
+/* Para exportar: se a cifra só existe na nuvem, baixa antes de usar. */
+async function resolveBlob(song) {
+  let blob = await loadFile(song);
+  if (!blob && song.cloudPath && song.storage === 'cloud') {
+    try {
+      await cloudDownloadSong(song);
+      blob = await loadFile(song);
+    } catch (err) {
+      console.warn('Não foi possível baixar ' + song.name + ' para exportar', err);
+    }
+  }
+  return blob;
+}
+
+/* "Manter neste aparelho": baixa a cifra que hoje só está na nuvem. */
+async function keepLocal(song) {
+  if (cloudSyncing) {
+    toast('Aguarde a sincronização atual terminar.', 'error');
+    return;
+  }
+  if (!song.cloudPath) {
+    toast('Esta cifra não está na nuvem.', 'error');
+    return;
+  }
+  cloudSyncing = true;
+  try {
+    setProgress(0.3, 'Baixando ' + song.name + '…');
+    await cloudDownloadSong(song, (msg) => setProgress(0.6, msg));
+    await loadAll();
+    render();
+    toast('"' + song.name + '" agora está neste aparelho.');
+  } catch (err) {
+    console.error('Falha ao baixar ' + song.name, err);
+    toast('Não foi possível baixar agora. Verifique a internet.', 'error');
+  } finally {
+    cloudSyncing = false;
+    setProgress(null);
+  }
+}
+
+/* "Liberar espaço": apaga o arquivo local, mantendo a ficha e a nuvem. */
+async function confirmRelease(song) {
+  if (!song.cloudPath) {
+    toast('Esta cifra não está na nuvem; se apagar, ela se perde.', 'error');
+    return;
+  }
+  if (!confirm('Liberar o arquivo de "' + song.name + '" do aparelho?\n\n' +
+    'A cifra continua na nuvem e você pode baixar de novo quando quiser.')) return;
+  try {
+    await releaseFile(song);
+    render();
+    toast('Espaço liberado. A cifra continua na nuvem.');
+  } catch (err) {
+    console.error('Falha ao liberar espaço', err);
+    toast('Não foi possível liberar o espaço.', 'error');
+  }
+}
+
+/* Remove o arquivo do aparelho, mantendo a ficha da música (dados e etiquetas). */
+async function releaseFile(song) {
+  if (song.storage === 'folder') await removeFromFolder(diskName(song));
+  try { await deleteOne('files', song.id); } catch (err) { /* já não havia */ }
+  song.storage = 'cloud';
+  await saveMeta(song);
+}
+
 async function saveSongRecord(song, blob, text) {
   const meta = metaOf(song);
   if (!db) {
     mem.songs.set(song.id, meta);
-    mem.files.set(song.id, { id: song.id, blob });
+    if (blob) mem.files.set(song.id, { id: song.id, blob });
+    else mem.files.delete(song.id);
     mem.texts.set(song.id, { id: song.id, text });
     return;
   }
-  await tx(['songs', 'files', 'texts'], 'readwrite', (stores) => Promise.all([
-    req(stores[0].put(meta)),
-    req(stores[1].put({ id: song.id, blob })),
-    req(stores[2].put({ id: song.id, text }))
-  ]));
+  await tx(['songs', 'files', 'texts'], 'readwrite', (stores) => {
+    const jobs = [
+      req(stores[0].put(meta)),
+      req(stores[2].put({ id: song.id, text }))
+    ];
+    // Quando o arquivo está na pasta do aparelho, não duplicamos no IndexedDB.
+    if (blob) jobs.push(req(stores[1].put({ id: song.id, blob })));
+    else jobs.push(req(stores[1].delete(song.id)));
+    return Promise.all(jobs);
+  });
 }
 
 async function saveMeta(song) {
@@ -607,6 +826,9 @@ async function openCloudModal() {
   const connected = Boolean(sessionStorage.getItem(REFRESH_KEY));
   const hasFolder = Boolean(cloudCfg) && typeof cloudCfg.folderPath === 'string';
   const folder = hasFolder ? (cloudCfg.folderPath || '(raiz do Dropbox)') : '';
+  const naNuvem = songs.filter((song) => song.storage === 'cloud').length;
+  const noAparelho = songs.length - naNuvem;
+  const usandoPasta = Boolean(dirHandle);
 
   $('#modalBody').innerHTML = `
     <h2 id="modalTitle">Nuvem (Dropbox)</h2>
@@ -616,14 +838,31 @@ async function openCloudModal() {
     ${hasFolder
       ? `<p class="export-info">Pasta base: <strong>${esc(folder)}</strong></p>`
       : ''}
+    ${songs.length
+      ? `<p class="export-info">${noAparelho} cifra(s) neste aparelho${naNuvem ? ' · ' + naNuvem + ' só na nuvem' : ''}.</p>`
+      : ''}
     ${cloudPending ? `<p class="export-info export-warn">${cloudPending} arquivo(s) importado(s) aguardando envio.</p>` : ''}
     <div class="modal-actions">
       ${connected
-        ? `<button class="primary grow" data-act="cloud-pick-folder">${hasFolder ? 'Trocar pasta' : 'Escolher pasta'}</button>`
+        ? `<button class="primary grow" data-act="cloud-pick-folder">${hasFolder ? 'Trocar pasta do Dropbox' : 'Escolher pasta do Dropbox'}</button>`
         : `<button class="primary grow" data-act="cloud-connect">Entrar no Dropbox</button>`}
     </div>
     <div class="modal-actions">
       <button data-act="cloud-sync" ${connected && hasFolder ? '' : 'disabled'}>Sincronizar agora</button>
+      ${naNuvem ? `<button data-act="cloud-download-all">Baixar todas</button>` : ''}
+    </div>
+    <p class="export-title">Arquivos neste aparelho</p>
+    ${dirSupported()
+      ? `<p class="export-info">
+          ${usandoPasta
+            ? `Guardando os arquivos na pasta <strong>${esc(dirHandle.name)}</strong>.`
+            : 'Opcional: guarde os arquivos em uma pasta do aparelho (como o cartão SD), em vez do armazenamento interno.'}
+        </p>
+        <div class="modal-actions">
+          <button data-act="cloud-pick-device-folder">${usandoPasta ? 'Trocar pasta do aparelho' : 'Usar uma pasta do aparelho'}</button>
+        </div>`
+      : `<p class="export-info">Este navegador não permite escolher uma pasta do aparelho; os arquivos ficam no armazenamento interno do app.</p>`}
+    <div class="modal-actions">
       ${connected ? `<button data-act="cloud-disconnect">Sair</button>` : ''}
       <button data-act="cancel-export">Fechar</button>
     </div>
@@ -682,7 +921,62 @@ function downloadPathFor(entry) {
   return entry.path_lower || entry.path_display;
 }
 
-async function cloudSync() {
+/* Compara nomes de cifra sem depender da extensão nem de maiúsculas.
+   O import local guarda o nome sem extensão; a nuvem guarda com. */
+function sameSongName(a, b) {
+  const clean = (value) => String(value || '').replace(/\.(pdf|docx?)$/i, '').trim().toLowerCase();
+  return clean(a) === clean(b);
+}
+
+/* Baixa um arquivo da nuvem e o guarda no aparelho. */
+async function cloudDownloadSong(song, onProgress) {
+  const path = song.cloudPath;
+  const response = await cloudGetDbx().then((dbx) => dbx.filesDownload({ path }));
+  const blob = response.result.fileBlob;
+  const buffer = await blob.arrayBuffer();
+
+  if (onProgress) onProgress('Baixando: ' + song.name);
+  const nomeArquivo = diskName(song);
+  const text = await extractText({ name: nomeArquivo }, buffer.slice(0));
+
+  song.type = /\.pdf$/i.test(nomeArquivo) ? 'pdf' : 'doc';
+  song.file = song.file || nomeArquivo;
+  song.size = blob.size;
+  song.hash = await sha256(buffer.slice(0));
+  song.text = text;
+  song.downloadedAt = Date.now();
+  buildHay(song);
+
+  await storeFile(song, blob, text);
+  await saveMeta(song);
+  if (!mem.songs.has(song.id)) {
+    songs.push(song);
+    mem.songs.set(song.id, song);
+  }
+  return song;
+}
+
+/* Baixa várias cifras, mostrando o progresso. */
+async function downloadSongs(list) {
+  let done = 0;
+  let failed = 0;
+  for (const song of list) {
+    try {
+      setProgress(done / list.length, 'Baixando ' + (done + 1) + ' de ' + list.length + ': ' + song.name);
+      await cloudDownloadSong(song);
+    } catch (err) {
+      failed++;
+      console.warn('Falha ao baixar ' + song.name, err);
+    }
+    done++;
+  }
+  await loadAll();
+  render();
+  return { done: done - failed, failed };
+}
+
+/* Primeira etapa da sincronização: metadados + listagem, sem baixar arquivos. */
+async function cloudRefreshList() {
   if (cloudSyncing) {
     toast('A sincronização já está em andamento.', 'error');
     return;
@@ -694,84 +988,112 @@ async function cloudSync() {
   }
 
   cloudSyncing = true;
-  const folder = cloudCfg.folderPath;
-  const localByPath = new Map();
-  songs.forEach((song) => { if (song.cloudPath) localByPath.set(song.cloudPath, song); });
-
-  let added = 0;
-  let updated = 0;
-  let failed = 0;
-  let index = 0;
-
   try {
-    const entries = await cloudListEntries(folder);
+    setProgress(0.15, 'Lendo etiquetas e repertórios…');
+    await cloudPullMeta();
+
+    setProgress(0.5, 'Listando as cifras do Dropbox…');
+    const entries = await cloudListEntries(cloudCfg.folderPath);
     const files = entries.filter((entry) => entry['.tag'] === 'file' && /\.(pdf|docx?)$/i.test(entry.name));
-    const total = files.length || 1;
 
+    let novas = 0;
     for (const entry of files) {
-      index++;
-      setProgress(index / total * 0.95, 'Sincronizando ' + index + ' de ' + files.length + ': ' + entry.name);
       const path = downloadPathFor(entry);
-      const local = localByPath.get(path);
-      const remoteRev = entry.rev;
+      let song = songs.find((item) => item.cloudPath === path);
 
-      // Já temos e a versão é a mesma: não baixa de novo.
-      if (local && local.cloudRev === remoteRev) continue;
-
-      const existing = songs.find((song) => song.name === entry.name && !song.cloudPath);
-      if (local || existing) {
-        // Conteúdo mudou na nuvem: baixa a versão nova.
-      }
-
-      try {
-        const response = await cloudGetDbx().then((dbx) => dbx.filesDownload({ path }));
-        const blob = response.result.fileBlob;
-        const buffer = await blob.arrayBuffer();
-        const text = await extractText({ name: entry.name }, buffer.slice(0));
-        const song = local || existing || { id: uid(), name: entry.name };
-        song.name = entry.name;
-        song.type = /\.pdf$/i.test(entry.name) ? 'pdf' : 'doc';
-        song.size = blob.size;
-        song.addedAt = song.addedAt || Date.now();
-        song.updatedAt = Date.now();
-        song.cloudPath = path;
-        song.cloudRev = remoteRev;
-        song.text = text;
-        song.hash = await sha256(buffer.slice(0));
-        buildHay(song);
-        await saveSongRecord(song, blob, text);
-        await saveMeta(song);
-        if (!mem.songs.has(song.id)) {
+      if (!song) {
+        // Ainda não conhecemos: cria a ficha, sem baixar o arquivo.
+        // O import local guarda o nome sem extensão; por isso comparamos sem ela.
+        song = songs.find((item) => !item.cloudPath &&
+          (sameSongName(item.name, entry.name) || sameSongName(item.file || '', entry.name)));
+        if (!song) {
+          song = { id: uid(), name: entry.name, addedAt: Date.now() };
           songs.push(song);
           mem.songs.set(song.id, song);
+          novas++;
         }
-        if (local) updated++; else added++;
-      } catch (err) {
-        failed++;
-        console.warn('Falha ao baixar ' + entry.name, err);
+        song.cloudPath = path;
+        song.cloudRev = entry.rev;
+        song.size = entry.size;
+        song.type = /\.pdf$/i.test(entry.name) ? 'pdf' : 'doc';
+        song.file = song.file || entry.name;
+        await saveMeta(song);
       }
+
+      // A ficha está na nuvem e o arquivo não está no aparelho?
+      const blob = await getOne('files', song.id);
+      const noAparelho = Boolean(blob && blob.blob) || song.storage === 'folder';
+      if (!noAparelho) song.storage = 'cloud';
+      if (noAparelho) song.storage = dirHandle ? 'folder' : 'internal';
+      song.cloudPath = path;
+      song.cloudRev = entry.rev;
+      buildHay(song);
+      await saveMeta(song);
     }
 
-    setProgress(0.97, 'Lendo metadados…');
-    await cloudPullMeta();
+    // Envia o que foi importado no aparelho e ainda não existe na nuvem.
+    setProgress(0.8, 'Enviando o que foi importado…');
     await cloudPushImports();
     await cloudPushMeta();
+
     await loadAll();
     render();
-
     closeModal();
-    const parts = [];
-    if (added) parts.push(added + ' nova(s)');
-    if (updated) parts.push(updated + ' atualizada(s)');
-    if (failed) parts.push(failed + ' com erro');
-    toast(parts.length ? 'Sincronizado: ' + parts.join(', ') + '.' : 'Tudo já estava em dia.');
+
+    const naNuvem = songs.filter((song) => song.storage === 'cloud').length;
+    const tocando = novas ? novas + ' ficha(s) nova(s). ' : '';
+    toast('Lista atualizada. ' + tocando + (naNuvem ? naNuvem + ' cifra(s) só na nuvem.' : 'Todas estão no aparelho.'));
+    return { naNuvem, novas };
   } catch (err) {
-    console.error('Falha na sincronização', err);
-    toast(err && err.message ? err.message : 'A sincronização falhou.', 'error');
+    console.error('Falha ao atualizar a lista', err);
+    toast(err && err.message ? err.message : 'Não foi possível atualizar a lista.', 'error');
+    return null;
   } finally {
     cloudSyncing = false;
     setProgress(null);
   }
+}
+
+/* Pergunta o que fazer quando há cifras apenas na nuvem. */
+function askDownloadAll(naNuvem) {
+  $('#modalBody').innerHTML = `
+    <h2 id="modalTitle">Cifras na nuvem</h2>
+    <p class="export-info">
+      Há <strong>${naNuvem} cifra(s)</strong> no Dropbox que ainda não estão neste aparelho.
+    </p>
+    <p class="export-info">
+      Você pode baixar todas agora, ou deixar só listadas e baixar apenas as que for usar.
+      As que ficarem na nuvem aparecem com a marca <strong>nuvem</strong> na biblioteca.
+    </p>
+    <div class="modal-actions">
+      <button class="primary grow" data-act="cloud-download-all">Baixar todas agora</button>
+    </div>
+    <div class="modal-actions">
+      <button data-act="cloud-keep-listed">Só listar, baixo depois</button>
+    </div>
+  `;
+  showModal();
+}
+
+async function cloudDownloadAllNow() {
+  const pendentes = songs.filter((song) => song.storage === 'cloud');
+  closeModal();
+  if (!pendentes.length) {
+    toast('Tudo já está no aparelho.');
+    return;
+  }
+  const result = await downloadSongs(pendentes);
+  toast(result.failed
+    ? 'Baixadas ' + result.done + ', com ' + result.failed + ' erro(s).'
+    : 'Baixadas ' + result.done + ' cifra(s).',
+    result.failed ? 'error' : '');
+}
+
+/* Sincronizar agora: atualiza a lista e, se faltar arquivo, pergunta. */
+async function cloudSync() {
+  const result = await cloudRefreshList();
+  if (!result) return;
+  if (result.naNuvem > 0) askDownloadAll(result.naNuvem);
 }
 
 /* Envia para a nuvem os arquivos que foram importados no aparelho. */
@@ -779,12 +1101,13 @@ async function cloudPushImports() {
   const pending = songs.filter((song) => !song.cloudPath);
   for (const song of pending) {
     try {
-      const record = await getOne('files', song.id);
-      if (!record || !record.blob) continue;
-      const target = (cloudCfg.folderPath ? cloudCfg.folderPath + '/' : '/') + song.name;
+      // Pode estar no IndexedDB ou na pasta escolhida do aparelho.
+      const blob = await loadFile(song);
+      if (!blob) continue;
+      const target = (cloudCfg.folderPath ? cloudCfg.folderPath + '/' : '/') + diskName(song);
       const result = await cloudGetDbx().then((dbx) => dbx.filesUpload({
         path: target,
-        contents: record.blob,
+        contents: blob,
         mode: { '.tag': 'overwrite' },
         autorename: true,
         mute: true
@@ -1018,7 +1341,7 @@ async function importFiles(fileList) {
         }
 
         setProgress((index + 0.9) / files.length, 'Salvando ' + file.name + '…');
-        await saveSongRecord(song, blob, text);
+        await storeFile(song, blob, text);
         buildHay(song);
 
         if (existing) {
@@ -1081,14 +1404,22 @@ function filtered() {
 }
 
 function songRow(song) {
+  const nuvem = song.storage === 'cloud';
   return `<div class="row" data-song="${song.id}">
     <button class="star ${song.fav ? 'on' : ''}" data-act="fav" data-song="${song.id}"
       aria-label="${song.fav ? 'Remover dos favoritos' : 'Marcar como favorita'}" title="Favorita">${song.fav ? '★' : '☆'}</button>
     <button class="main" data-act="open" data-song="${song.id}">
-      <span class="name">${esc(song.name)}</span>
+      <span class="name">${esc(song.name)}${nuvem ? ' <span class="cloud-badge" title="Só na nuvem">☁</span>' : ''}</span>
       <span class="sub">${esc(subtitle(song))}</span>
     </button>
     ${song.key ? `<span class="key">${esc(song.key)}</span>` : ''}
+    ${song.cloudPath
+      ? (nuvem
+        ? `<button class="icon-btn" data-act="keep-local" data-song="${song.id}"
+            aria-label="Manter ${esc(song.name)} neste aparelho" title="Manter neste aparelho">⤓</button>`
+        : `<button class="icon-btn" data-act="release" data-song="${song.id}"
+            aria-label="Liberar espaço de ${esc(song.name)}" title="Liberar espaço (mantém na nuvem)">⤒</button>`)
+      : ''}
     <button class="icon-btn" data-act="edit" data-song="${song.id}"
       aria-label="Editar ${esc(song.name)}" title="Editar">⋯</button>
   </div>`;
@@ -1436,12 +1767,12 @@ async function buildListZip(list, onProgress) {
       missing.push('(removida da biblioteca)');
       continue;
     }
-    const record = await getOne('files', song.id);
-    if (!record || !record.blob) {
+    const record = await resolveBlob(song);
+    if (!record) {
       missing.push(song.name);
       continue;
     }
-    songs.push({ song, blob: record.blob });
+    songs.push({ song, blob: record });
     if (onProgress) {
       onProgress(
         (index + 1) / list.items.length * 0.35,
@@ -1527,9 +1858,9 @@ async function pdfBytesForSong(song, onProgress) {
   if (currentBlobSongId === song.id && currentBlob) {
     raw = await currentBlob.arrayBuffer();
   } else {
-    const record = await getOne('files', song.id);
-    if (!record || !record.blob) return null;
-    raw = await record.blob.arrayBuffer();
+    const record = await resolveBlob(song);
+    if (!record) return null;
+    raw = await record.arrayBuffer();
   }
 
   // Copia os bytes sem abrir o PDF no pdf.js, para preservar cifras escritas à mão.
@@ -1772,6 +2103,7 @@ async function deleteSong(song) {
   if (!confirm(warning)) return;
 
   try {
+    if (song.storage === 'folder') await removeFromFolder(diskName(song));
     const updatedLists = await deleteSongRecord(song.id);
     songs = songs.filter((item) => item.id !== song.id);
     for (const updated of updatedLists) {
@@ -1868,21 +2200,27 @@ async function showSong() {
     (queue.length > 1 ? (qi + 1) + '/' + queue.length + ' · ' : '') +
     song.name + (song.key ? ' · ' + song.key : '');
 
-  let record;
+  let blob;
   try {
-    record = await getOne('files', song.id);
+    if (song.storage === 'cloud' && song.cloudPath) {
+      body.innerHTML = '<div class="viewer-msg">Baixando da nuvem…</div>';
+      await cloudDownloadSong(song);
+      await loadAll();
+    }
+    blob = await loadFile(song);
   } catch (err) {
     console.error(err);
   }
 
   if (token !== renderGeneration) return;
 
-  if (!record || !record.blob) {
-    body.innerHTML = '<div class="viewer-msg">O arquivo não foi encontrado neste aparelho.<br>Importe novamente.</div>';
+  if (!blob) {
+    body.innerHTML = song.storage === 'cloud'
+      ? '<div class="viewer-msg">Não foi possível baixar agora.<br>Verifique a internet e tente de novo.</div>'
+      : '<div class="viewer-msg">O arquivo não foi encontrado neste aparelho.<br>Importe novamente.</div>';
     return;
   }
 
-  const blob = record.blob;
   currentBlob = blob;
   currentBlobSongId = song.id;
 
@@ -2166,14 +2504,14 @@ async function fileRecordForCurrent() {
     return { song, blob: currentBlob };
   }
   try {
-    const record = await getOne('files', song.id);
-    if (!record || !record.blob) {
-      toast('Arquivo não encontrado neste aparelho.', 'error');
+    const blob = await resolveBlob(song);
+    if (!blob) {
+      toast('Arquivo não encontrado.', 'error');
       return null;
     }
-    currentBlob = record.blob;
+    currentBlob = blob;
     currentBlobSongId = song.id;
-    return { song, blob: record.blob };
+    return { song, blob };
   } catch (err) {
     console.error(err);
     toast('Não foi possível ler o arquivo.', 'error');
@@ -2297,6 +2635,12 @@ function bindEvents() {
         case 'open':
           if (song) openFromLibrary(song);
           break;
+        case 'keep-local':
+          if (song) await keepLocal(song);
+          break;
+        case 'release':
+          if (song) await confirmRelease(song);
+          break;
         case 'edit':
           if (song) openEdit(song);
           break;
@@ -2397,16 +2741,14 @@ function bindEvents() {
         await cloudSync();
       } else if (action === 'cloud-disconnect') {
         await cloudSignOut();
-      } else if (action === 'open-cloud') {
-        await openCloudModal();
-      } else if (action === 'cloud-connect') {
-        await cloudConnect();
-      } else if (action === 'cloud-pick-folder') {
-        await cloudPickFolder();
-      } else if (action === 'cloud-sync') {
-        await cloudSync();
-      } else if (action === 'cloud-disconnect') {
-        await cloudSignOut();
+      } else if (action === 'cloud-download-all') {
+        await cloudDownloadAllNow();
+      } else if (action === 'cloud-keep-listed') {
+        closeModal();
+        toast('Tudo bem: as cifras ficam listadas e você baixa quando quiser.');
+      } else if (action === 'cloud-pick-device-folder') {
+        const ok = await pickDeviceFolder();
+        if (ok) await openCloudModal();
       }
     } catch (err) {
       console.error(err);
@@ -2531,6 +2873,13 @@ async function init() {
 
   render();
   registerServiceWorker();
+
+  // Revincula a pasta do aparelho, se o navegador permitir.
+  try {
+    await restoreDirHandle();
+  } catch (err) {
+    console.warn('Pasta do aparelho não revinculada.', err);
+  }
 
   // Se o Dropbox acabou de devolver o login, conclui e atualiza a tela.
   try {

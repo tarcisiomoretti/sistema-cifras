@@ -537,15 +537,26 @@ Para o tamanho da banda, a primeira opção tende a bastar. Fica registrado como
 - Botão **☁ Nuvem** no cabeçalho. Sem o App key configurado, ele mostra as instruções em vez de quebrar.
 - **Entrar/Sair** com PKCE, sem segredo de cliente. O `?code=` é retirado da barra de endereço assim que o login termina.
 - **Escolher pasta** listando as pastas do Dropbox (a pasta escolhida fica só no aparelho).
-- **Sincronizar agora**, manual: baixa os arquivos novos ou alterados (comparando a revisão), envia o que foi importado no aparelho e troca o `_cifras-meta.json`.
+- **Sincronizar agora**, manual, em duas etapas:
+  1. **Lista tudo, sem baixar**: lê o `_cifras-meta.json` (etiquetas, favoritas e repertórios) e cria a ficha de cada cifra da pasta na biblioteca, marcando cada uma como **neste aparelho** ou **só na nuvem**. Também envia para a nuvem o que foi importado no aparelho.
+  2. **Pergunta o que fazer** quando há cifras só na nuvem: *baixar todas agora* ou *só listar, baixo depois*.
+- Cada cifra na biblioteca mostra um **☁** e a marca **nuvem** no subtítulo quando o arquivo não está no aparelho, com duas ações:
+  - **⤓ Manter neste aparelho** — baixa só aquela cifra.
+  - **⤒ Liberar espaço** — apaga o arquivo local e mantém a ficha e a cópia na nuvem.
+- **Abrir uma cifra que só está na nuvem baixa na hora e abre**; ela fica guardada para as próximas vezes.
+- **Exportar** (zip e PDF único) também baixa da nuvem o que faltar, em vez de deixar de fora.
+- **Guardar numa pasta do aparelho (cartão SD)**: quando o navegador permite escolher uma pasta (`showDirectoryPicker`), o app passa a gravar e ler os arquivos **direto nessa pasta**, sem ocupar o armazenamento interno. A escolha fica na tela de nuvem; o handle é tentado no IndexedDB e a permissão é pedida de novo quando o navegador não a mantém (caso do Android).
 - O token de atualização fica no `sessionStorage`: sobrevive a recarregamentos na mesma aba e desaparece ao fechar o navegador, exigindo novo login — comportamento conservador e seguro.
 
 > Observação de segurança: hoje o token de atualização é mantido na sessão da aba. Isso é intencional nesta primeira versão; se o login frequente incomodar no tablet, dá para passar a guardá-lo de forma persistente mais adiante, com a devida avaliação de risco.
 
+> Sobre a pasta do aparelho: a `showDirectoryPicker` só passou a existir no Chrome para **Android 132+** (janeiro de 2025) e a permissão **não é persistente** no Android — o app pede a pasta de novo quando o navegador não a lembra. Quando não há suporte, o app avisa e segue usando o armazenamento interno.
+
 ### 12.10 Decisões em aberto
 
 - Todos na mesma conta ou cada um com a própria? *(propenso a: mesma conta, login manual em cada aparelho)*
-- Baixar a pasta inteira ou só o que for aberto/marcado como offline?
 - Ao apagar uma cifra no app, manter o arquivo na nuvem e criar só a lápide nos metadados?
 - Se o arquivo sumir da nuvem, remover da biblioteca ou marcar como “arquivo ausente”?
 - Sincronizar só no botão (decidido) — vale também um lembrete automático se houver pendências ao abrir?
+
+*(Resolvido em 22/10: baixar a pasta inteira ou só o que for aberto → **perguntar sempre**, com a opção de baixar todas ou só listar. Onde guardar → **interno até o usuário escolher uma pasta do aparelho**.)*

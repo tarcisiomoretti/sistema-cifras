@@ -11,7 +11,8 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 - Etiquetas, favoritas e edição de nome/artista/tom.
 - Repertórios com adicionar, reordenar, remover e tocar em sequência.
 - Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF, para baixar ou compartilhar.
-- **Nuvem (Dropbox)**: entrar na conta, escolher a pasta das cifras e sincronizar quando quiser (arquivos + etiquetas e repertórios).
+- **Nuvem (Dropbox)**: entrar na conta, escolher a pasta das cifras e sincronizar quando quiser — **lista tudo sem baixar**, pergunta se quer baixar todas ou só listar, e permite **manter neste aparelho** ou **liberar espaço** por cifra. Abrir uma cifra que só está na nuvem baixa na hora.
+- **Guardar numa pasta do aparelho (cartão SD)** quando o navegador permite escolher uma pasta; sem suporte, usa o armazenamento interno do app.
 - Modo palco com PDF renderizado sob demanda, zoom, fundo invertido, troca de música e atalhos de teclado.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.
 - Tema claro/escuro salvo.
