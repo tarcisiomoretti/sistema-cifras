@@ -18,7 +18,7 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 - Repertórios recolhíveis: toque no nome para expandir e ver todas as músicas.
 - Repertórios com adicionar, arrastar para reordenar, remover e tocar em sequência.
 - Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF, para baixar ou compartilhar.
-- Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música e atalhos de teclado.
+- Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música pelos botões ◀ ▶, setas do teclado e deslize horizontal. Ao abrir uma cifra de um repertório, as demais cifras daquele repertório são pré-carregadas em segundo plano.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.
 - No visualizador, **↗ Abrir em outro app** tenta compartilhar o arquivo; se o Samsung Notes não aparecer no menu, use **📂 Localizar** para abrir pela pasta no Meus Arquivos. **⤓ Baixar** guarda uma cópia em Downloads.
 - Tema claro/escuro salvo.
@@ -136,7 +136,7 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 - Exportação de repertório em zip, com dois arquivos na ordem correta (`01 - ...`, `02 - ...`), incluindo o caminho de "Compartilhar" com a tela de arquivo pronto.
 - PDF único do repertório: 4 páginas na ordem correta (3 de um PDF de 3 páginas + 1 de outro), com o texto preservado e a cifra DOCX avisada e excluída.
 - Tema persistente após recarregar.
-- Migração do banco versão 1 para a versão 2.
+- Migração do banco versão 1 para a versão atual.
 - Uso offline com o servidor desligado, abrindo o app e um PDF.
 
 Ainda falta o teste real no tablet e no iPhone, principalmente a escolha da pasta no navegador do tablet e a anotação com caneta/dedo na tela sensível.

@@ -54,7 +54,11 @@
   etiquetas, favoritas e repertórios.
 - Importação manual continua disponível (PDF, DOC, DOCX, PNG, JPG). Com pasta conectada
   ela grava o original na pasta; sem pasta, mantém a cópia no armazenamento interno.
-- O `sw.js` foi para **`cifras-v12`**.
+- O `sw.js` foi para **`cifras-v13`**.
+- **Troca de cifra no visualizador.** Os botões ◀ ▶, as setas do teclado e o deslize
+  horizontal funcionam. Ao abrir uma cifra de um repertório, o app pré-carrega em
+  segundo plano as demais cifras **daquele repertório**; ao abrir pela biblioteca,
+  nada é pré-carregado. O cache é liberado ao fechar o visualizador.
 - A pasta pede permissão de **leitura e escrita** porque grava o backup do banco,
   recebe arquivos importados e salva anotações feitas nos PDFs. Fora essas ações
   explícitas, o app não altera nem apaga as cifras.
@@ -110,7 +114,7 @@
 ## Fluxo de publicação (lembrete)
 
 1. Alterar os arquivos.
-2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v12`).
+2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v13`).
 3. `git commit` + `git push origin main`.
 4. O GitHub Pages publica sozinho em ~1 minuto.
 

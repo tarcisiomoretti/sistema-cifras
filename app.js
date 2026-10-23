@@ -42,11 +42,18 @@ const addQ = {};
 
 let queue = [];
 let qi = 0;
+let queueSource = 'library';
 let zoom = 1;
 let invert = false;
 let viewerOpen = false;
 let currentDoc = null;
+let currentDocSongId = null;
 let renderGeneration = 0;
+let preloadToken = 0;
+let swipeState = null;
+const preloadedFiles = new Map();
+const preloadedPdfDocs = new Map();
+const preloadPromises = new Map();
 let pageObserver = null;
 let pageElements = [];
 const renderedPages = new Map(); // número da página -> { canvas, page, task }
@@ -771,6 +778,7 @@ async function findFolderFileByMeta(song) {
 /* Lê o arquivo da pasta mapeada; se não houver, usa o armazenamento interno. */
 async function loadFile(song) {
   if (!song) return null;
+  if (preloadedFiles.has(song.id)) return preloadedFiles.get(song.id);
   const hadFolder = Boolean(dirHandle);
   if (song.folderPath && !dirHandle) {
     // Depois de reiniciar/reinstalar, o navegador pode deixar a pasta apenas
@@ -1962,6 +1970,7 @@ async function toggleFav(song) {
 
 function openFromLibrary(song) {
   const visible = filtered();
+  queueSource = 'library';
   queue = visible.map((item) => item.id);
   qi = queue.indexOf(song.id);
   if (qi < 0) {
@@ -1977,6 +1986,7 @@ function playList(list) {
     toast('Este repertório está vazio.');
     return;
   }
+  queueSource = 'list';
   qi = 0;
   openViewer();
 }
@@ -1988,7 +1998,28 @@ function playListSong(list, songId) {
     queue = [songId];
     qi = 0;
   }
+  queueSource = 'list';
   openViewer();
+}
+
+function updateStepButtons() {
+  const prev = $('#prevSong');
+  const next = $('#nextSong');
+  if (prev) prev.disabled = qi <= 0;
+  if (next) next.disabled = qi >= queue.length - 1;
+}
+
+function stepSong(delta) {
+  if (!queue.length) return;
+  const target = qi + delta;
+  if (target < 0 || target >= queue.length) {
+    toast(delta > 0 ? 'Esta é a última cifra.' : 'Esta é a primeira cifra.');
+    return;
+  }
+  if (annotating && annotationHistory.length &&
+    !confirm('Descartar as anotações que ainda não foram salvas?')) return;
+  qi = target;
+  showSong();
 }
 
 async function createList() {
@@ -2550,7 +2581,10 @@ async function deleteSong(song) {
 
   try {
     // Cifras mapeadas não são apagadas do tablet; ficam ocultas para não voltar na próxima leitura.
-    if (mapped && song.folderPath) hideFolderPath(song.folderPath);
+    if (mapped && song.folderPath) {
+      hideFolderPath(song.folderPath);
+      await removeOriginalPath(originalPathForSong(song));
+    }
     const updatedLists = await deleteSongRecord(song.id);
     songs = songs.filter((item) => item.id !== song.id);
     for (const updated of updatedLists) {
@@ -2653,18 +2687,107 @@ function resetPdf() {
   renderingPages.clear();
   pageElements = [];
   if (currentDoc) {
-    destroyPdfDoc(currentDoc);
+    if (!currentDocSongId || preloadedPdfDocs.get(currentDocSongId) !== currentDoc) {
+      destroyPdfDoc(currentDoc);
+    }
     currentDoc = null;
+    currentDocSongId = null;
   }
+}
+
+function clearPreloadedQueue() {
+  preloadToken++;
+  preloadedFiles.clear();
+  preloadPromises.clear();
+  for (const doc of preloadedPdfDocs.values()) {
+    if (doc !== currentDoc) destroyPdfDoc(doc);
+  }
+  preloadedPdfDocs.clear();
+}
+
+function invalidatePreloadedSong(songId, blob) {
+  const doc = preloadedPdfDocs.get(songId);
+  if (doc) {
+    preloadedPdfDocs.delete(songId);
+    if (doc !== currentDoc) destroyPdfDoc(doc);
+  }
+  preloadPromises.delete(songId);
+  if (blob) preloadedFiles.set(songId, blob);
+  else preloadedFiles.delete(songId);
+}
+
+async function preloadSong(song, token) {
+  if (!song || song.missing) return;
+  if (song.folderPath && !dirHandle) return;
+  if (preloadedFiles.has(song.id) &&
+    (song.type !== 'pdf' || preloadedPdfDocs.has(song.id) || !window.pdfjsLib)) return;
+
+  const running = preloadPromises.get(song.id);
+  if (running) {
+    try { await running; } catch (err) { /* ignore */ }
+    return;
+  }
+
+  const job = (async () => {
+    let blob = preloadedFiles.get(song.id);
+    if (!blob) {
+      try {
+        blob = await loadFile(song);
+      } catch (err) {
+        return;
+      }
+      if (!blob || token !== preloadToken) return;
+      preloadedFiles.set(song.id, blob);
+    }
+
+    if (song.type !== 'pdf' || !window.pdfjsLib || preloadedPdfDocs.has(song.id)) return;
+
+    let doc;
+    try {
+      doc = await pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
+    } catch (err) {
+      console.warn('Não foi possível pré-carregar a cifra ' + song.name, err);
+      return;
+    }
+
+    if (token !== preloadToken || !viewerOpen || preloadedFiles.get(song.id) !== blob) {
+      destroyPdfDoc(doc);
+      return;
+    }
+
+    const current = preloadedPdfDocs.get(song.id);
+    if (current) destroyPdfDoc(doc);
+    else preloadedPdfDocs.set(song.id, doc);
+  })();
+
+  preloadPromises.set(song.id, job);
+  try {
+    await job;
+  } finally {
+    if (preloadPromises.get(song.id) === job) preloadPromises.delete(song.id);
+  }
+}
+
+function startPreloadQueue() {
+  const token = ++preloadToken;
+  const ids = queue.filter((id) => id !== queue[qi]);
+  (async () => {
+    for (const id of ids) {
+      if (token !== preloadToken || !viewerOpen) return;
+      await preloadSong(songById(id), token);
+    }
+  })();
 }
 
 async function openViewer() {
   if (!queue.length) return;
+  clearPreloadedQueue();
   viewerOpen = true;
   const viewer = $('#viewer');
   viewer.classList.add('show');
   viewer.setAttribute('aria-hidden', 'false');
   await showSong();
+  if (queueSource === 'list') startPreloadQueue();
 }
 
 function closeViewer() {
@@ -2674,6 +2797,7 @@ function closeViewer() {
   viewerOpen = false;
   renderGeneration++;
   resetPdf();
+  clearPreloadedQueue();
   currentBlob = null;
   currentBlobSongId = null;
   if (currentObjectUrl) {
@@ -2710,6 +2834,7 @@ async function showSong() {
   $('#viewerTitle').textContent =
     (queue.length > 1 ? (qi + 1) + '/' + queue.length + ' · ' : '') +
     song.name + (song.key ? ' · ' + song.key : '');
+  updateStepButtons();
   updateAnnotateButton(song);
 
   if (song.missing) {
@@ -2750,16 +2875,30 @@ async function showSong() {
   }
   currentBlob = blob;
   currentBlobSongId = song.id;
+  if (queueSource === 'list') preloadedFiles.set(song.id, blob);
 
   try {
     if (song.type === 'pdf') {
       if (!window.pdfjsLib) throw new Error('pdf.js não carregado');
-      const doc = await pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
-      if (token !== renderGeneration) {
-        destroyPdfDoc(doc);
-        return;
+      let doc = preloadedPdfDocs.get(song.id);
+      if (!doc) {
+        const running = preloadPromises.get(song.id);
+        if (running) {
+          try { await running; } catch (err) { /* ignore */ }
+          if (token !== renderGeneration) return;
+          doc = preloadedPdfDocs.get(song.id);
+        }
+      }
+      if (!doc) {
+        doc = await pdfjsLib.getDocument({ data: await blob.arrayBuffer() }).promise;
+        if (token !== renderGeneration) {
+          destroyPdfDoc(doc);
+          return;
+        }
+        if (queueSource === 'list') preloadedPdfDocs.set(song.id, doc);
       }
       currentDoc = doc;
+      currentDocSongId = song.id;
       await setupPdf(doc, token);
     } else if (song.type === 'docx') {
       if (!window.mammoth) throw new Error('mammoth não carregado');
@@ -3045,6 +3184,9 @@ function updateAnnotateButton(song) {
   if (btn) {
     btn.hidden = !can;
     btn.classList.toggle('on', Boolean(can && annotating));
+    btn.title = can && annotating
+      ? 'Sair do modo de anotação'
+      : 'Anotar no PDF com a caneta ou o dedo';
   }
   if (restore) restore.hidden = !can;
 }
@@ -3086,6 +3228,11 @@ function setAnnotationTool(tool) {
 }
 
 function startAnnotating() {
+  if (annotating) {
+    if (annotationHistory.length && !confirm('Descartar as anotações que ainda não foram salvas?')) return;
+    stopAnnotating();
+    return;
+  }
   const song = currentSong();
   if (!song || song.type !== 'pdf' || song.missing) {
     toast('Anotação disponível apenas para PDFs abertos.');
@@ -3435,6 +3582,7 @@ async function persistUpdatedBlob(song, blob) {
     song.missing = false;
     song.updatedAt = Date.now();
     await saveMeta(song);
+    invalidatePreloadedSong(song.id, blob);
     scheduleBackup();
     return 'folder';
   }
@@ -3443,6 +3591,7 @@ async function persistUpdatedBlob(song, blob) {
   song.size = blob.size;
   song.updatedAt = Date.now();
   await saveSongRecord(song, blob, song.text || '');
+  invalidatePreloadedSong(song.id, blob);
   return 'internal';
 }
 
@@ -3970,6 +4119,36 @@ function bindEvents() {
   $('#closeViewer').addEventListener('click', closeViewer);
   $('#prevSong').addEventListener('click', () => stepSong(-1));
   $('#nextSong').addEventListener('click', () => stepSong(1));
+
+  const viewerBody = $('#viewerBody');
+  viewerBody.addEventListener('touchstart', (event) => {
+    if (!viewerOpen || annotating || event.touches.length !== 1) {
+      swipeState = null;
+      return;
+    }
+    const touch = event.touches[0];
+    swipeState = { x: touch.clientX, y: touch.clientY, time: Date.now() };
+  }, { passive: true });
+
+  viewerBody.addEventListener('touchend', (event) => {
+    const start = swipeState;
+    swipeState = null;
+    if (!start || !viewerOpen || annotating) return;
+    if (!event.changedTouches || event.changedTouches.length !== 1) return;
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Date.now() - start.time > 900) return;
+    if (Math.abs(dx) < 70 || Math.abs(dx) < Math.abs(dy) * 1.6) return;
+    const maxScroll = viewerBody.scrollWidth - viewerBody.clientWidth;
+    if (maxScroll > 2) {
+      if (dx < 0 && viewerBody.scrollLeft < maxScroll - 2) return;
+      if (dx > 0 && viewerBody.scrollLeft > 2) return;
+    }
+    stepSong(dx < 0 ? 1 : -1);
+  }, { passive: true });
+
+  viewerBody.addEventListener('touchcancel', () => { swipeState = null; }, { passive: true });
   $('#zoomOut').addEventListener('click', () => changeZoom(-0.15));
   $('#zoomIn').addEventListener('click', () => changeZoom(0.15));
   $('#invertBtn').addEventListener('click', () => {
