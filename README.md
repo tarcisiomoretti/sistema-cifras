@@ -6,9 +6,10 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 
 ## O que já funciona
 
-- **Pasta das cifras**: escolha uma pasta do tablet (ou do computador) e o app lista automaticamente os PDF, DOC, DOCX e imagens (PNG/JPG) que estiverem nela, inclusive em subpastas. As cifras são lidas **direto da pasta**: nada é copiado, movido ou apagado. Ao colocar ou remover arquivos, use **Atualizar lista**.
+- **Pasta das cifras**: escolha uma pasta do tablet (ou do computador) e o app lista automaticamente os PDF, DOC, DOCX e imagens (PNG/JPG) que estiverem nela, inclusive em subpastas. As cifras são lidas **direto da pasta**. Ao importar um arquivo novo com a pasta conectada, ele é gravado nessa pasta (e aparece nela); nada é movido ou apagado sem ação sua. Ao colocar ou remover arquivos, use **Atualizar lista**.
 - **Banco na pasta**: o app grava automaticamente `cifras-backup.json` na pasta escolhida (metadados, repertórios, textos, ocultos e arquivos importados). Serve para sincronizar a pasta com o OneDrive e restaurar em outro aparelho.
-- Importar PDF, DOCX, DOC, PNG e JPG avulsos (arrastando ou pelo botão), como alternativa quando o navegador não permite mapear uma pasta.
+- Importar PDF, DOCX, DOC, PNG e JPG avulsos (arrastando ou pelo botão). Com uma pasta conectada, o arquivo original é salvo nela; sem pasta, fica no armazenamento interno do app.
+- **Anotar no PDF**: abra a cifra e toque em **✏ Anotar** para escrever com o dedo ou a caneta, escolher cor/espessura, desfazer e **Salvar no PDF**. As anotações são gravadas no próprio arquivo original (na pasta ou no armazenamento interno).
 - Busca instantânea por nome, artista, tom, etiqueta e texto da letra (todas as páginas dos PDFs; a busca pelo texto é preparada aos poucos, ao abrir cada cifra, ou pelo botão **Preparar busca pelo texto**).
 - Etiquetas, favoritas e edição de nome/artista/tom.
 - Repertórios recolhíveis: toque no nome para expandir e ver todas as músicas.
@@ -63,8 +64,9 @@ O botão 📁 abre a tela da pasta. O app usa a **File System Access API** do na
 no IndexedDB; ao abrir o app de novo, o navegador pode pedir para confirmar o acesso —
 basta tocar em **Reconectar**.
 
-A leitura das cifras é somente leitura: o app nunca altera nem apaga os arquivos da pasta.
-A única escrita é o arquivo `cifras-backup.json`, usado como banco portátil. Ele é atualizado
+O app lê as cifras da pasta e só escreve nela quando você pede: ao importar um arquivo
+(quando a pasta está conectada), ao salvar anotações feitas em um PDF e ao atualizar o
+arquivo `cifras-backup.json`, usado como banco portátil. O backup é atualizado
 automaticamente quando algo muda e também pode ser salvo ou restaurado pelos botões da tela
 da pasta. Se o navegador não oferecer essa API (por exemplo, Firefox antigo), use
 **Importar arquivos / pasta**; nesse caso os arquivos são copiados para o armazenamento
@@ -98,6 +100,7 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 - Ao abrir o app por `http://IP:8000`, o service worker e a instalação como PWA não funcionam. Além disso, o IndexedDB é separado por endereço e porta: se o IP do computador mudar, o tablet enxerga outro site e a biblioteca parece vazia. Para uso real, use um endereço HTTPS fixo.
 - `.doc` antigo é listado e pode ser baixado, mas não abre no navegador. Converta para `.docx` ou PDF.
 - PDFs escritos à mão (Samsung Notes) e imagens não têm texto; a busca encontra só pelo nome.
+- A anotação grava no **próprio PDF original**, como pedido. Se quiser guardar uma versão sem anotações, mantenha uma cópia do arquivo antes de salvar.
 - Não há transposição de tom.
 - O Safari pode limpar dados de sites pouco usados. Instalar na Tela de Início e manter o app em uso reduz o risco; mantenha as cifras originais na pasta mapeada.
 - O visualizador abre PDFs página a página; arquivos muito grandes ainda dependem da memória do aparelho.
@@ -107,6 +110,8 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 - Mapeamento de pasta com PDF, DOCX e PNG, incluindo subpastas: os arquivos aparecem sozinhos na biblioteca, sem cópia, e a imagem abre no visualizador.
 - Backup do banco em `cifras-backup.json` na pasta, automático e manual, com restauração conferida.
 - Releitura da pasta: arquivos novos entram e os removidos ficam marcados como ausentes, sem apagar metadados.
+- Importação com pasta conectada: o arquivo de teste foi gravado na pasta e o metadado ficou como `storage: 'folder'`; sem pasta, cai no armazenamento interno.
+- Anotação em PDF: traço desenhado no visualizador e salvo no arquivo original; o PDF foi regravado e reabriu com a anotação.
 - Repertório recolhível: clique no cabeçalho expande e mostra todas as músicas; na edição, a linha inteira é arrastada para reordenar.
 - Importação de PDF de 3 páginas, PDF de 40 páginas e DOCX.
 - Busca sem acentos (`adoracao` encontra `adoração`).
@@ -120,7 +125,7 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 - Migração do banco versão 1 para a versão 2.
 - Uso offline com o servidor desligado, abrindo o app e um PDF.
 
-Ainda falta o teste real no tablet e no iPhone, principalmente a escolha da pasta no navegador do tablet e o fluxo de edição com a caneta.
+Ainda falta o teste real no tablet e no iPhone, principalmente a escolha da pasta no navegador do tablet e a anotação com caneta/dedo na tela sensível.
 
 ## Licenças de terceiros
 

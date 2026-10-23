@@ -1338,7 +1338,7 @@ async function importFiles(fileList, options = {}) {
     await requestPersistence();
 
     let canWriteFolder = false;
-    if (copyToFolder && dirHandle) {
+    if (copyToFolder && (dirHandle || pendingDirHandle)) {
       canWriteFolder = await ensureFolderPermission();
       if (!canWriteFolder) {
         toast('Sem permissão de escrita na pasta: as cifras serão guardadas só no app.', 'error');
@@ -3523,21 +3523,3 @@ async function init() {
 }
 
 init();
-
-/* Debug/test exposure */
-try {
-  Object.defineProperty(window, 'dirHandle', { get: function() { return dirHandle; }, set: function(v) { dirHandle = v; }, configurable: true });
-  Object.defineProperty(window, 'songs', { get: function() { return songs; }, set: function(v) { songs = v; }, configurable: true });
-  Object.defineProperty(window, 'lists', { get: function() { return lists; }, set: function(v) { lists = v; }, configurable: true });
-  Object.defineProperty(window, 'queue', { get: function() { return queue; }, set: function(v) { queue = v; }, configurable: true });
-  Object.defineProperty(window, 'qi', { get: function() { return qi; }, set: function(v) { qi = v; }, configurable: true });
-  Object.defineProperty(window, 'openViewer', { get: function() { return openViewer; }, configurable: true });
-  Object.defineProperty(window, 'closeViewer', { get: function() { return closeViewer; }, configurable: true });
-  Object.defineProperty(window, 'importFiles', { get: function() { return importFiles; }, configurable: true });
-  Object.defineProperty(window, 'startAnnotating', { get: function() { return startAnnotating; }, configurable: true });
-  Object.defineProperty(window, 'stopAnnotating', { get: function() { return stopAnnotating; }, configurable: true });
-  Object.defineProperty(window, 'saveAnnotations', { get: function() { return saveAnnotations; }, configurable: true });
-  Object.defineProperty(window, 'annotationHistory', { get: function() { return annotationHistory; }, set: function(v) { annotationHistory = v; }, configurable: true });
-  Object.defineProperty(window, 'annotations', { get: function() { return annotations; }, set: function(v) { annotations = v; }, configurable: true });
-  Object.defineProperty(window, 'annotating', { get: function() { return annotating; }, set: function(v) { annotating = v; }, configurable: true });
-} catch (e) {}
