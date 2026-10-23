@@ -45,8 +45,8 @@
       <button id="zoomIn" title="Aumentar zoom" aria-label="Aumentar zoom">+</button>
       <button id="invertBtn" title="Inverter cores" aria-label="Inverter cores">◐</button>
       <button id="annotateBtn" title="Anotar no PDF com a caneta ou o dedo" aria-label="Anotar no PDF" hidden>✏<span class="label"> Anotar</span></button>
-      <button id="downloadBtn" title="Baixar o arquivo original"><span class="label">✎ Abrir</span></button>
-      <button id="shareBtn" title="Compartilhar o arquivo"><span class="label">⤴ Compartilhar</span></button>
+      <button id="downloadBtn" title="Baixar uma cópia do arquivo"><span class="label">⤓ Baixar</span></button>
+      <button id="shareBtn" title="Abrir no Samsung Notes ou em outro app"><span class="label">↗ Abrir em outro app</span></button>
     </div>
     <div class="annotation-bar" id="annotationBar" hidden>
       <div class="annot-colors" role="group" aria-label="Cor da caneta">
@@ -59,6 +59,7 @@
         <input type="range" id="annotSize" min="1" max="10" step="1" value="3">
       </label>
       <button data-annot-act="undo" title="Desfazer último traço">↶ Desfazer</button>
+      <button data-annot-act="eraser" id="annotEraserBtn" title="Borracha (também funciona com o botão do S Pen)">⌫ Borracha</button>
       <button data-annot-act="clear" title="Limpar todas as anotações desta sessão">Limpar</button>
       <button data-annot-act="pan" id="annotPanBtn" title="Rolar a cifra sem desenhar">✋ Rolar</button>
       <button data-annot-act="cancel" title="Sair sem salvar">Cancelar</button>

@@ -67,6 +67,7 @@ let annotating = false;
 let annotationColor = '#111111';
 let annotationWidth = 3;
 let annotationPan = false;
+let annotationTool = 'pen'; // 'pen' | 'erase'
 let annotationBusy = false;
 let annotations = new Map(); // página -> [traço]
 let annotationHistory = []; // traços na ordem em que foram desenhados
@@ -557,6 +558,28 @@ async function pickLibraryFolder() {
     pendingDirHandle = null;
     setFolderEnabled(true);
     await saveDirHandle(handle);
+
+    // Uma instalação nova não tem dados locais. Se a pasta já tiver o backup,
+    // restaura antes de qualquer gravação automática para não sobrescrever o banco.
+    const found = await detectFolderBackup();
+    if (found) {
+      const hasLocalData = songs.length > 0 || lists.length > 0;
+      if (!hasLocalData) {
+        if (found.backup) {
+          toast('Backup encontrado na pasta. Restaurando automaticamente…');
+          await importDbFromFolder({ file: found.file, skipConfirm: true, auto: true });
+        }
+      } else if (confirm(
+        'Esta pasta já tem um backup do Sistema de Cifras' +
+        (found.backup && found.backup.exportedAt
+          ? ' (salvo em ' + new Date(found.backup.exportedAt).toLocaleString() + ')'
+          : '') +
+        '.\n\nOK = restaurar o backup da pasta neste aparelho.\n' +
+        'Cancelar = manter os dados atuais; o backup da pasta será substituído por eles.'
+      )) {
+        await importDbFromFolder({ file: found.file, skipConfirm: true, auto: true });
+      }
+    }
     return true;
   } catch (err) {
     if (err && err.name === 'AbortError') return false;
@@ -754,6 +777,15 @@ async function scanLibraryFolder(options = {}) {
   if (!hasPermission) {
     if (!options.silent) toast('Libere o acesso à pasta para atualizar a lista.', 'error');
     return null;
+  }
+
+  // Instalação nova (ou dados locais apagados): aproveita o banco que já está
+  // na pasta antes de a leitura automática sobrescrevê-lo.
+  if (!songs.length && !lists.length) {
+    const found = await detectFolderBackup();
+    if (found && found.backup) {
+      await importDbFromFolder({ file: found.file, skipConfirm: true, auto: true });
+    }
   }
 
   folderScanning = true;
@@ -1011,6 +1043,17 @@ async function writeFileByPath(path, content) {
   return handle;
 }
 
+async function removeFileByPath(path) {
+  if (!dirHandle) throw new Error('Pasta não conectada.');
+  const parts = String(path || '').split('/').filter(Boolean);
+  if (!parts.length) throw new Error('Caminho inválido.');
+  let folder = dirHandle;
+  for (let index = 0; index < parts.length - 1; index++) {
+    folder = await folder.getDirectoryHandle(parts[index]);
+  }
+  await folder.removeEntry(parts[parts.length - 1]);
+}
+
 async function readFileFromFolder(filename) {
   if (!dirHandle) return null;
   try {
@@ -1018,6 +1061,20 @@ async function readFileFromFolder(filename) {
     return await handle.getFile();
   } catch (err) {
     return null;
+  }
+}
+
+async function detectFolderBackup() {
+  const file = await readFileFromFolder(BACKUP_FILENAME);
+  if (!file) return null;
+  try {
+    const backup = JSON.parse(await file.text());
+    if (!backup || backup.app !== 'sistema-cifras') {
+      return { file, backup: null };
+    }
+    return { file, backup };
+  } catch (err) {
+    return { file, backup: null };
   }
 }
 
@@ -1089,7 +1146,9 @@ async function exportDbToFolder(options = {}) {
   }
 }
 
-async function importDbFromFolder() {
+async function importDbFromFolder(options = {}) {
+  const skipConfirm = Boolean(options.skipConfirm);
+  const auto = Boolean(options.auto);
   if (!dirHandle) {
     toast('Escolha a pasta primeiro.', 'error');
     return false;
@@ -1100,13 +1159,13 @@ async function importDbFromFolder() {
     return false;
   }
 
-  const file = await readFileFromFolder(BACKUP_FILENAME);
+  const file = options.file || await readFileFromFolder(BACKUP_FILENAME);
   if (!file) {
     toast('Arquivo cifras-backup.json não encontrado nesta pasta.', 'error');
     return false;
   }
 
-  if (!confirm('Restaurar o banco a partir de cifras-backup.json?\n\nIsso irá sobrescrever metadados, listas, textos e arquivos importados neste aparelho. As cifras mapeadas da pasta permanecem.')) {
+  if (!skipConfirm && !confirm('Restaurar o banco a partir de cifras-backup.json?\n\nIsso irá sobrescrever metadados, listas, textos e arquivos importados neste aparelho. As cifras mapeadas da pasta permanecem.')) {
     return false;
   }
 
@@ -1170,8 +1229,8 @@ async function importDbFromFolder() {
     await loadAll();
     render();
     setProgress(null);
-    toast('Backup restaurado com sucesso.');
-    closeModal();
+    toast(auto ? 'Backup da pasta restaurado.' : 'Backup restaurado com sucesso.');
+    if (!auto) closeModal();
     return true;
   } catch (err) {
     console.error('Falha ao restaurar backup', err);
@@ -1203,8 +1262,8 @@ function openFolderModal() {
     ${supported
       ? `<p class="export-info">
           Escolha a pasta do tablet onde já estão as cifras. O app lê PDF, DOCX, DOC e imagens
-          (PNG/JPG) sem copiar nada para dentro do aplicativo. Só o arquivo de backup do banco
-          é gravado na pasta. Ao adicionar ou remover arquivos, toque em <strong>Atualizar lista</strong>.
+          (PNG/JPG) direto da pasta. Ao importar, o arquivo é salvo nela; ao salvar anotações,
+          o PDF é atualizado no lugar. Ao adicionar ou remover arquivos, toque em <strong>Atualizar lista</strong>.
         </p>
         <div class="modal-actions">
           <button class="primary grow" data-act="folder-pick">${name ? 'Trocar pasta' : 'Escolher pasta do tablet'}</button>
@@ -1223,7 +1282,9 @@ function openFolderModal() {
     <p class="export-info">
       O banco (metadados, repertórios, textos e arquivos importados) é salvo em
       <strong>cifras-backup.json</strong> nesta pasta, atualizado automaticamente quando algo muda.
-      Assim você pode sincronizar a pasta com o OneDrive. As cifras em si nunca são alteradas.
+      Assim você pode sincronizar a pasta com o OneDrive. Numa instalação nova, ao escolher esta
+      pasta o backup é restaurado automaticamente. As cifras só são alteradas quando
+      você importa um arquivo ou salva anotações em um PDF.
     </p>
     <div class="modal-actions">
       <button data-act="folder-backup" ${dirHandle ? '' : 'disabled'}>Salvar backup agora</button>
@@ -2180,6 +2241,7 @@ function showModal() {
    ============================================================ */
 function openEdit(song) {
   editingSongId = song.id;
+  const mapped = Boolean(song.folderPath) || song.source === 'folder';
   $('#modalBody').innerHTML = `
     <h2 id="modalTitle">Editar cifra</h2>
     <div class="file-name">${esc(song.file)}</div>
@@ -2194,7 +2256,12 @@ function openEdit(song) {
     <div class="modal-actions">
       <button class="primary grow" data-act="save-edit">Salvar</button>
       <button data-act="cancel-edit">Cancelar</button>
-      <button class="danger" data-act="delete-song">Excluir</button>
+    </div>
+    <div class="modal-actions">
+      ${mapped
+        ? `<button data-act="delete-song">Ocultar da biblioteca</button>
+           <button class="danger" data-act="delete-file">Apagar da pasta</button>`
+        : `<button class="danger" data-act="delete-song">Excluir do aparelho</button>`}
     </div>
   `;
   $('#modal').classList.add('show');
@@ -2251,7 +2318,7 @@ async function deleteSong(song) {
   const count = lists.filter((list) => list.items.includes(song.id)).length;
   const mapped = Boolean(song.folderPath) || song.source === 'folder';
   const warning = (mapped
-    ? 'Remover "' + song.name + '" da biblioteca?\n\nO arquivo original NÃO será apagado da pasta do tablet.'
+    ? 'Ocultar "' + song.name + '" da biblioteca?\n\nO arquivo original continua na pasta do tablet.'
     : 'Excluir "' + song.name + '" do aparelho?') +
     (count ? '\n\nEla também será removida de ' + count + ' repertório(s).' : '');
   if (!confirm(warning)) return;
@@ -2267,10 +2334,52 @@ async function deleteSong(song) {
     }
     closeModal();
     render();
-    toast(mapped ? 'Removida da biblioteca. O arquivo continua na pasta.' : 'Cifra excluída.');
+    toast(mapped ? 'Oculta da biblioteca. O arquivo continua na pasta.' : 'Cifra excluída do aparelho.');
   } catch (err) {
     console.error(err);
     toast('Não foi possível excluir a cifra.', 'error');
+  }
+}
+
+async function deleteFolderFile(song) {
+  if (!song || !song.folderPath) {
+    toast('Este arquivo não está na pasta mapeada.', 'error');
+    return;
+  }
+  if (!dirHandle) {
+    const restored = await restoreDirHandle();
+    if (!restored) {
+      toast('Conecte a pasta das cifras para apagar o arquivo.', 'error');
+      return;
+    }
+  }
+  const ok = await ensureFolderPermission();
+  if (!ok) {
+    toast('Sem permissão para apagar da pasta.', 'error');
+    return;
+  }
+  if (!confirm('Apagar DEFINITIVAMENTE "' + song.file + '" da pasta?\n\n' +
+    'O arquivo será removido do tablet e não poderá ser recuperado pelo app.')) return;
+
+  try {
+    try {
+      await removeFileByPath(song.folderPath);
+    } catch (err) {
+      if (!err || err.name !== 'NotFoundError') throw err;
+    }
+    setHiddenPaths(hiddenPaths().filter((path) => path !== song.folderPath));
+    const updatedLists = await deleteSongRecord(song.id);
+    songs = songs.filter((item) => item.id !== song.id);
+    for (const updated of updatedLists) {
+      const index = lists.findIndex((list) => list.id === updated.id);
+      if (index >= 0) lists[index] = updated;
+    }
+    closeModal();
+    render();
+    toast('Arquivo apagado da pasta.');
+  } catch (err) {
+    console.error('Falha ao apagar arquivo da pasta', err);
+    toast('Não foi possível apagar o arquivo da pasta.', 'error');
   }
 }
 
@@ -2698,21 +2807,33 @@ function stopAnnotating() {
   if (!annotating) {
     document.body.classList.remove('is-annotating');
     document.body.classList.remove('annotation-panning');
+    document.body.classList.remove('is-erasing');
     return;
   }
   annotating = false;
   annotationBusy = false;
   activeAnnotation = null;
+  annotationTool = 'pen';
   document.body.classList.remove('is-annotating');
   document.body.classList.remove('annotation-panning');
+  document.body.classList.remove('is-erasing');
   const bar = $('#annotationBar');
   if (bar) bar.hidden = true;
+  const eraser = $('#annotEraserBtn');
+  if (eraser) eraser.classList.remove('on');
   const btn = $('#annotateBtn');
   if (btn) btn.classList.remove('on');
   for (const page of pageElements) {
     const layer = page.querySelector('.annotation-layer');
     if (layer) layer.remove();
   }
+}
+
+function setAnnotationTool(tool) {
+  annotationTool = tool === 'erase' ? 'erase' : 'pen';
+  document.body.classList.toggle('is-erasing', annotationTool === 'erase');
+  const eraser = $('#annotEraserBtn');
+  if (eraser) eraser.classList.toggle('on', annotationTool === 'erase');
 }
 
 function startAnnotating() {
@@ -2731,6 +2852,7 @@ function startAnnotating() {
   annotationHistory = [];
   annotations = new Map();
   activeAnnotation = null;
+  setAnnotationTool('pen');
   document.body.classList.add('is-annotating');
   document.body.classList.remove('annotation-panning');
   const bar = $('#annotationBar');
@@ -2808,6 +2930,9 @@ function ensureAnnotationLayer(page) {
     layer.className = 'annotation-layer';
     layer.setAttribute('aria-label', 'Camada de anotação');
     layer.addEventListener('pointerdown', onAnnotationPointerDown);
+    layer.addEventListener('contextmenu', (event) => {
+      if (annotating) event.preventDefault();
+    });
     page.appendChild(layer);
   }
   page.appendChild(layer);
@@ -2829,6 +2954,18 @@ function redrawAllAnnotations() {
 function undoAnnotation() {
   const entry = annotationHistory.pop();
   if (!entry) return;
+
+  if (entry.type === 'erase') {
+    for (const item of entry.removed || []) {
+      if (!annotations.has(item.pageNumber)) annotations.set(item.pageNumber, []);
+      const strokes = annotations.get(item.pageNumber);
+      const index = Math.min(Math.max(0, item.index), strokes.length);
+      strokes.splice(index, 0, item.stroke);
+    }
+    redrawAllAnnotations();
+    return;
+  }
+
   const strokes = annotations.get(entry.pageNumber);
   if (!strokes) return;
   const idx = strokes.lastIndexOf(entry.stroke);
@@ -2858,22 +2995,89 @@ function toggleAnnotationPan() {
   if (pan) pan.classList.toggle('on', annotationPan);
 }
 
+function isEraserPointer(event) {
+  const buttons = Number(event.buttons) || 0;
+  if (event.button === 5 || (buttons & 32) === 32) return true;
+  // Alguns S Pens entregam o botão lateral como botão direito (2).
+  return event.pointerType === 'pen' && (event.button === 2 || (buttons & 2) === 2);
+}
+
+function pointSegmentDistance(px, py, x1, y1, x2, y2) {
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  if (!dx && !dy) return Math.hypot(px - x1, py - y1);
+  const t = Math.max(0, Math.min(1, ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)));
+  return Math.hypot(px - (x1 + t * dx), py - (y1 + t * dy));
+}
+
+function strokeNearPoint(stroke, rect, px, py, radius) {
+  const points = stroke && stroke.points ? stroke.points : [];
+  if (!points.length) return false;
+  const toPx = (point) => ({ x: point.x * rect.width, y: point.y * rect.height });
+  if (points.length === 1) {
+    const p = toPx(points[0]);
+    return Math.hypot(px - p.x, py - p.y) <= radius;
+  }
+  for (let index = 1; index < points.length; index++) {
+    const a = toPx(points[index - 1]);
+    const b = toPx(points[index]);
+    if (pointSegmentDistance(px, py, a.x, a.y, b.x, b.y) <= radius) return true;
+  }
+  return false;
+}
+
+function eraseAtPoint(layer, pageNumber, clientX, clientY, radius) {
+  const strokes = annotations.get(pageNumber);
+  if (!strokes || !strokes.length) return;
+  const rect = layer.getBoundingClientRect();
+  const px = clientX - rect.left;
+  const py = clientY - rect.top;
+  const removed = [];
+  for (let index = strokes.length - 1; index >= 0; index--) {
+    if (strokeNearPoint(strokes[index], rect, px, py, radius)) {
+      removed.push({ pageNumber, stroke: strokes[index], index });
+      strokes.splice(index, 1);
+    }
+  }
+  if (!removed.length) return;
+  removed.sort((a, b) => a.index - b.index);
+  annotationHistory.push({ type: 'erase', removed });
+  if (!strokes.length) annotations.delete(pageNumber);
+  sizeAnnotationLayer(layer);
+  drawAnnotationLayer(layer);
+}
+
 function onAnnotationPointerDown(event) {
   if (!annotating || annotationPan || annotationBusy) return;
-  if (event.button !== undefined && event.button !== 0 && event.button !== -1) return;
+  const erasing = annotationTool === 'erase' || isEraserPointer(event);
+  if (!erasing && event.button !== undefined && event.button !== 0 && event.button !== -1) return;
   const layer = event.currentTarget;
   const page = layer.closest('.pdf-page');
   if (!page) return;
   const pageNumber = Number(page.dataset.page);
   event.preventDefault();
   const rect = layer.getBoundingClientRect();
+
+  if (erasing) {
+    activeAnnotation = {
+      tool: 'erase',
+      pageNumber,
+      layer,
+      pointerId: event.pointerId,
+      radius: event.pointerType === 'pen' ? 18 : 14
+    };
+    try { layer.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+    eraseAtPoint(layer, pageNumber, event.clientX, event.clientY, activeAnnotation.radius);
+    return;
+  }
+
   const x = (event.clientX - rect.left) / Math.max(1, rect.width);
   const y = (event.clientY - rect.top) / Math.max(1, rect.height);
   const stroke = { color: annotationColor, width: Math.max(0.001, annotationWidth / Math.max(1, rect.width)), points: [{ x, y }] };
   if (!annotations.has(pageNumber)) annotations.set(pageNumber, []);
   annotations.get(pageNumber).push(stroke);
-  annotationHistory.push({ pageNumber, stroke });
-  activeAnnotation = { pageNumber, stroke, layer, pointerId: event.pointerId };
+  annotationHistory.push({ type: 'draw', pageNumber, stroke });
+  activeAnnotation = { tool: 'pen', pageNumber, stroke, layer, pointerId: event.pointerId };
   try { layer.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
   sizeAnnotationLayer(layer);
   drawAnnotationLayer(layer);
@@ -2883,6 +3087,16 @@ function onAnnotationPointerMove(event) {
   if (!activeAnnotation || !annotating || annotationPan) return;
   if (event.pointerId !== activeAnnotation.pointerId) return;
   event.preventDefault();
+  if (activeAnnotation.tool === 'erase') {
+    eraseAtPoint(
+      activeAnnotation.layer,
+      activeAnnotation.pageNumber,
+      event.clientX,
+      event.clientY,
+      activeAnnotation.radius || 14
+    );
+    return;
+  }
   const layer = activeAnnotation.layer;
   const rect = layer.getBoundingClientRect();
   const x = (event.clientX - rect.left) / Math.max(1, rect.width);
@@ -3032,7 +3246,7 @@ async function downloadCurrent() {
   const found = await fileRecordForCurrent();
   if (!found) return;
   downloadBlob(found.blob, found.song.file);
-  toast('Arquivo baixado. Edite e reimporte com o mesmo nome para atualizar.');
+  toast('Cópia baixada para a pasta Downloads do aparelho.');
 }
 
 async function shareCurrent() {
@@ -3284,6 +3498,9 @@ function bindEvents() {
       else if (action === 'delete-song') {
         const song = songById(editingSongId);
         if (song) await deleteSong(song);
+      } else if (action === 'delete-file') {
+        const song = songById(editingSongId);
+        if (song) await deleteFolderFile(song);
       } else if (action === 'export-zip-download' || action === 'export-zip-share') {
         const list = listById(button.dataset.list);
         if (list) await exportListZip(list, action === 'export-zip-download' ? 'download' : 'share');
@@ -3415,12 +3632,14 @@ function bindEvents() {
       if (color) {
         annotBar.querySelectorAll('[data-annot-color]').forEach((btn) => btn.classList.toggle('on', btn === color));
         annotationColor = color.dataset.annotColor;
+        setAnnotationTool('pen');
         return;
       }
       const act = event.target.closest('[data-annot-act]');
       if (!act) return;
       const action = act.dataset.annotAct;
       if (action === 'undo') undoAnnotation();
+      else if (action === 'eraser') setAnnotationTool(annotationTool === 'erase' ? 'pen' : 'erase');
       else if (action === 'clear') clearAnnotations();
       else if (action === 'pan') toggleAnnotationPan();
       else if (action === 'cancel') {

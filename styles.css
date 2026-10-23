@@ -248,6 +248,8 @@ body.dragging-row {
 .annot-size { display: flex; align-items: center; gap: 5px; font-size: 12px; color: var(--mu); }
 .annot-size input { width: 82px; }
 .annotation-bar .primary { background: var(--ac); color: var(--ac-tx); border-color: var(--ac); }
+.annotation-bar button.on { background: var(--ac); color: var(--ac-tx); border-color: var(--ac); }
+body.is-erasing .annotation-layer { cursor: cell; }
 body.is-annotating .annotation-layer { pointer-events: auto; }
 .annotation-layer {
   position: absolute;

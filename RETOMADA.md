@@ -23,25 +23,29 @@
 - **Banco de dados na pasta.** O app grava `cifras-backup.json` na pasta escolhida,
   atualizado automaticamente após alterações. O arquivo inclui metadados, repertórios,
   textos, cifras ocultas e arquivos importados manualmente. Dá para salvar na hora ou
-  restaurar pela tela da pasta; as cifras em si continuam intactas.
+  restaurar pela tela da pasta; as cifras em si continuam intactas. Numa instalação nova,
+  ao escolher uma pasta que já tenha o backup, o app restaura o banco automaticamente
+  antes de gravar por cima.
 - **Importação grava na pasta.** Quando a pasta está conectada, um arquivo importado é
   salvo nela (além de aparecer na biblioteca). Sem pasta, fica no armazenamento interno.
 - **Anotação em PDF.** O visualizador ganhou **✏ Anotar**: desenhar com dedo/caneta,
-  escolher cor e espessura, desfazer/limpar e **Salvar no PDF**. A anotação é gravada no
-  arquivo original, seja ele da pasta ou interno.
+  escolher cor e espessura, desfazer, usar a borracha (botão do S Pen ou **⌫ Borracha**)
+  e **Salvar no PDF**. A anotação é gravada no arquivo original, seja ele da pasta ou interno.
 - **Repertórios recolhíveis e arrastáveis.** Clicar no cabeçalho expande e mostra todas
   as músicas. Em **Editar**, a linha inteira pode ser arrastada para reordenar (sem
   setinhas ou alça).
+- **Excluir com opção.** Para cifra da pasta, **Ocultar da biblioteca** mantém o arquivo;
+  **Apagar da pasta** remove o arquivo definitivamente, com confirmação.
+- **Abrir em outro app.** O botão **↗ Abrir em outro app** compartilha o arquivo com o
+  Samsung Notes sem baixar uma cópia permanente; **⤓ Baixar** salva uma cópia em Downloads.
 - **Imagens abrem no visualizador**, com zoom, como os PDFs.
 - **Busca pelo texto** dos PDFs/DOCX é preparada aos poucos ao abrir cada cifra;
   também existe o botão **Preparar busca pelo texto** na tela da pasta.
-- **Excluir da biblioteca não apaga o arquivo**: a cifra mapeada fica só oculta
-  (há o botão **Mostrar ocultos** para trazer de volta).
 - Arquivos que somem da pasta ficam marcados como **ausentes**, sem perder
   etiquetas, favoritas e repertórios.
 - Importação manual continua disponível (PDF, DOC, DOCX, PNG, JPG). Com pasta conectada
   ela grava o original na pasta; sem pasta, mantém a cópia no armazenamento interno.
-- O `sw.js` foi para **`cifras-v10`**.
+- O `sw.js` foi para **`cifras-v11`**.
 - A pasta pede permissão de **leitura e escrita** porque grava o backup do banco,
   recebe arquivos importados e salva anotações feitas nos PDFs. Fora essas ações
   explícitas, o app não altera nem apaga as cifras.
@@ -59,8 +63,12 @@
    de escrita). Alterar algo e verificar que o arquivo é atualizado.
 9. Importar um PDF pelo botão **Importar** e conferir se o arquivo apareceu na pasta.
 10. Abrir um PDF, tocar em **✏ Anotar**, fazer um traço e salvar; fechar e abrir de novo
-    para confirmar que a anotação ficou no arquivo.
-11. Em **Repertórios**, tocar no cabeçalho para expandir; tocar em **Editar** e
+    para confirmar que a anotação ficou no arquivo. Testar a borracha pelo botão
+    **⌫ Borracha** e pelo botão do S Pen.
+11. Em **Editar** uma cifra da pasta, testar **Ocultar da biblioteca** e **Apagar da pasta**.
+12. Em uma instalação limpa, escolher uma pasta que já tenha `cifras-backup.json` e
+    confirmar que o banco é restaurado antes de ser regravado.
+13. Em **Repertórios**, tocar no cabeçalho para expandir; tocar em **Editar** e
     arrastar a linha da música para conferir a nova ordem.
 
 ## Pendências conhecidas / decisões em aberto
@@ -72,6 +80,8 @@
 - O navegador pode exigir confirmar o acesso à pasta após reiniciar; o botão
   **Reconectar** resolve.
 - Ainda não há transposição de tom.
+- A borracha apaga os traços da sessão atual. Depois de salvar, a anotação vira
+  parte do PDF e não pode ser apagada separadamente pela borracha em outra sessão.
 - Repertórios grandes (zip/PDF único) ainda dependem da memória do tablet.
 
 ## Documentação detalhada
@@ -83,7 +93,7 @@
 ## Fluxo de publicação (lembrete)
 
 1. Alterar os arquivos.
-2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v10`).
+2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v11`).
 3. `git commit` + `git push origin main`.
 4. O GitHub Pages publica sozinho em ~1 minuto.
 
