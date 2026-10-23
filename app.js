@@ -1946,7 +1946,7 @@ function listCard(list) {
 function renderListsView() {
   $('#main').innerHTML = `
     <div class="bar">
-      <input type="text" id="newListName" placeholder="Nome do novo repertório (ex.: Culto domingo)" autocomplete="off">
+      <input type="text" id="newListName" placeholder="Nome do novo repertório" autocomplete="off">
       <button class="primary" data-act="create-list">Criar</button>
     </div>
     ${lists.length ? lists.map(listCard).join('') : '<div class="empty">Nenhum repertório ainda.<br>Crie um para organizar as músicas de cada culto.</div>'}
@@ -2185,8 +2185,8 @@ function openExportModal(list) {
   pendingExport = null;
 
   const found = list.items.map(songById).filter(Boolean);
-  const pdfSongs = found.filter((song) => song.type === 'pdf');
-  const otherSongs = found.filter((song) => song.type !== 'pdf');
+  const exportableSongs = found.filter((song) => song.type === 'pdf' || song.type === 'image');
+  const otherSongs = found.filter((song) => song.type !== 'pdf' && song.type !== 'image');
   const total = found.reduce((sum, song) => sum + (Number(song.size) || 0), 0);
   const missing = list.items.length - found.length;
   const big = total > MAX_ZIP_BYTES;
@@ -2207,15 +2207,15 @@ function openExportModal(list) {
       <button data-act="export-zip-share" data-list="${list.id}">Compartilhar</button>
     </div>
 
-    <h3 class="export-title">PDF único${otherSongs.length ? ' (somente PDFs)' : ''}</h3>
+    <h3 class="export-title">PDF único (PDFs e imagens)</h3>
     <p class="export-info">
-      Junta as cifras em um só PDF, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular.
-      ${pdfSongs.length ? '' : '<br><strong>Este repertório não tem nenhuma cifra em PDF.</strong>'}
+      Junta as cifras em PDF e as imagens PNG/JPEG em um só PDF, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular.
+      ${exportableSongs.length ? '' : '<br><strong>Este repertório não tem nenhuma cifra em PDF ou imagem.</strong>'}
     </p>
     ${otherSongs.length ? `<p class="export-info export-warn">Ficarão de fora do PDF único (${otherSongs.length}): ${esc(otherSongs.slice(0, 8).map((song) => song.name).join(', '))}${otherSongs.length > 8 ? '…' : ''}. Use o zip para levá-las.</p>` : ''}
     <div class="modal-actions">
-      <button class="primary grow" data-act="export-pdf-download" data-list="${list.id}" ${pdfSongs.length ? '' : 'disabled'}>⤓ Baixar .pdf</button>
-      <button data-act="export-pdf-share" data-list="${list.id}" ${pdfSongs.length ? '' : 'disabled'}>Compartilhar</button>
+      <button class="primary grow" data-act="export-pdf-download" data-list="${list.id}" ${exportableSongs.length ? '' : 'disabled'}>⤓ Baixar .pdf</button>
+      <button data-act="export-pdf-share" data-list="${list.id}" ${exportableSongs.length ? '' : 'disabled'}>Compartilhar</button>
     </div>
 
     <div class="modal-actions">
@@ -2346,10 +2346,67 @@ async function pdfBytesForSong(song, onProgress) {
   return raw;
 }
 
+async function imageBlobToPng(blob) {
+  if (!window.createImageBitmap) throw new Error('Este navegador não consegue converter esta imagem.');
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Não foi possível preparar a imagem.');
+    context.drawImage(bitmap, 0, 0);
+    const png = await new Promise((resolve, reject) => {
+      canvas.toBlob((result) => {
+        if (result) resolve(result);
+        else reject(new Error('Não foi possível converter a imagem.'));
+      }, 'image/png');
+    });
+    return { bytes: new Uint8Array(await png.arrayBuffer()), kind: 'png' };
+  } finally {
+    if (bitmap.close) bitmap.close();
+  }
+}
+
+async function imageDataForSong(song) {
+  const blob = currentBlobSongId === song.id && currentBlob ? currentBlob : await resolveBlob(song);
+  if (!blob) return null;
+  const file = String(song.file || song.name || '').toLowerCase();
+  const type = String(blob.type || '').toLowerCase();
+  if (type === 'image/png' || file.endsWith('.png')) {
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), kind: 'png' };
+  }
+  if (type === 'image/jpeg' || type === 'image/jpg' || file.endsWith('.jpg') || file.endsWith('.jpeg')) {
+    return { bytes: new Uint8Array(await blob.arrayBuffer()), kind: 'jpg' };
+  }
+  return imageBlobToPng(blob);
+}
+
+async function appendImagePage(pdf, imageData) {
+  const image = imageData.kind === 'png'
+    ? await pdf.embedPng(imageData.bytes)
+    : await pdf.embedJpg(imageData.bytes);
+  const { width, height } = image.scale(1);
+  const landscape = width > height;
+  const pageWidth = landscape ? 841.89 : 595.28;
+  const pageHeight = landscape ? 595.28 : 841.89;
+  const margin = 18;
+  const scale = Math.min((pageWidth - margin * 2) / width, (pageHeight - margin * 2) / height);
+  const drawWidth = width * scale;
+  const drawHeight = height * scale;
+  const page = pdf.addPage([pageWidth, pageHeight]);
+  page.drawImage(image, {
+    x: (pageWidth - drawWidth) / 2,
+    y: (pageHeight - drawHeight) / 2,
+    width: drawWidth,
+    height: drawHeight
+  });
+}
+
 async function buildListPdf(list, onProgress) {
   if (!window.PDFLib) throw new Error('pdf-lib não carregado');
 
-  const songs = [];
+  const items = [];
   const missing = [];
   const skipped = [];
 
@@ -2359,16 +2416,31 @@ async function buildListPdf(list, onProgress) {
       missing.push('(removida da biblioteca)');
       continue;
     }
-    if (song.type !== 'pdf') {
+    if (song.type === 'pdf') {
+      const bytes = await pdfBytesForSong(song, onProgress);
+      if (!bytes) {
+        skipped.push(song.name);
+        continue;
+      }
+      items.push({ kind: 'pdf', song, bytes });
+    } else if (song.type === 'image') {
+      try {
+        const image = await imageDataForSong(song);
+        if (!image) {
+          skipped.push(song.name);
+          continue;
+        }
+        items.push({ kind: 'image', song, image });
+      } catch (err) {
+        console.warn('Não foi possível ler a imagem ' + song.name, err);
+        skipped.push(song.name);
+        if (onProgress) onProgress(null, song.name + ': imagem não suportada, ficará de fora.');
+        continue;
+      }
+    } else {
       skipped.push(song.name);
       continue;
     }
-    const bytes = await pdfBytesForSong(song, onProgress);
-    if (!bytes) {
-      skipped.push(song.name);
-      continue;
-    }
-    songs.push({ song, bytes });
     if (onProgress) {
       onProgress(
         (index + 1) / list.items.length * 0.35,
@@ -2377,21 +2449,34 @@ async function buildListPdf(list, onProgress) {
     }
   }
 
-  if (!songs.length) throw new Error('Nenhuma cifra em PDF pôde ser usada.');
+  if (!items.length) throw new Error('Nenhuma cifra em PDF ou imagem pôde ser usada.');
 
   const merged = await PDFLib.PDFDocument.create();
-  for (let index = 0; index < songs.length; index++) {
-    const { song, bytes } = songs[index];
-    const source = await PDFLib.PDFDocument.load(bytes, { ignoreEncryption: true });
-    const pages = await merged.copyPages(source, source.getPageIndices());
-    pages.forEach((page) => merged.addPage(page));
+  let used = 0;
+  for (let index = 0; index < items.length; index++) {
+    const item = items[index];
+    try {
+      if (item.kind === 'pdf') {
+        const source = await PDFLib.PDFDocument.load(item.bytes, { ignoreEncryption: true });
+        const pages = await merged.copyPages(source, source.getPageIndices());
+        pages.forEach((page) => merged.addPage(page));
+      } else {
+        await appendImagePage(merged, item.image);
+      }
+      used++;
+    } catch (err) {
+      console.warn('Não foi possível juntar ' + item.song.name, err);
+      skipped.push(item.song.name);
+    }
     if (onProgress) {
       onProgress(
-        0.35 + (index + 1) / songs.length * 0.55,
-        'Juntando ' + (index + 1) + ' de ' + songs.length + ': ' + song.name
+        0.35 + (index + 1) / items.length * 0.55,
+        'Juntando ' + (index + 1) + ' de ' + items.length + ': ' + item.song.name
       );
     }
   }
+
+  if (!used) throw new Error('Nenhuma cifra em PDF ou imagem pôde ser usada.');
 
   if (onProgress) onProgress(0.92, 'Gerando o PDF…');
   const bytes = await merged.save({ useObjectStreams: true });
@@ -2401,10 +2486,10 @@ async function buildListPdf(list, onProgress) {
   return {
     blob,
     filename,
-    count: songs.length,
+    count: used,
     missing,
     skipped,
-    notes: skipped.length ? 'Ficaram de fora (não são PDF): ' + skipped.join(', ') : ''
+    notes: skipped.length ? 'Ficaram de fora: ' + skipped.join(', ') : ''
   };
 }
 
@@ -2770,11 +2855,18 @@ async function preloadSong(song, token) {
 
 function startPreloadQueue() {
   const token = ++preloadToken;
-  const ids = queue.filter((id) => id !== queue[qi]);
+  const ids = [];
+  for (let offset = 1; offset < queue.length; offset++) {
+    if (qi + offset < queue.length) ids.push(queue[qi + offset]);
+    if (qi - offset >= 0) ids.push(queue[qi - offset]);
+  }
   (async () => {
+    await new Promise((resolve) => setTimeout(resolve, 1200));
     for (const id of ids) {
       if (token !== preloadToken || !viewerOpen) return;
       await preloadSong(songById(id), token);
+      if (token !== preloadToken || !viewerOpen) return;
+      await new Promise((resolve) => setTimeout(resolve, 150));
     }
   })();
 }

@@ -41,7 +41,7 @@ A versão corrigida está nesta pasta, separada em arquivos (`index.html`, `styl
 - O botão **Editar** do repertório permite adicionar, reordenar (arrastando pelo ícone ⠿) e remover músicas.
 - Para adicionar, há um campo de busca com **filtro ao digitar**: aparecem as músicas que combinam, com o tom e um botão ＋.
 - O botão **⤓ Exportar** monta um `.zip` com os arquivos originais na ordem do repertório (`01 - Nome.pdf`), para baixar ou compartilhar.
-- O mesmo botão oferece o **PDF único**: junta as cifras em PDF num só arquivo, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular. As cifras DOCX/DOC ficam de fora, com aviso.
+- O mesmo botão oferece o **PDF único**: junta as cifras em PDF e as imagens (PNG/JPEG; WebP é convertido) num só arquivo, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular. As cifras DOCX/DOC ficam de fora, com aviso.
 
 ### Visualizador (modo palco)
 
@@ -192,7 +192,7 @@ vendor/                  pdf.js 3.11.174 + mammoth 1.6.0 + JSZip 3.10.1 + pdf-li
 
 - **Download independente do artifact:** `✎ Abrir` usa um download comum do navegador, com `Blob` e `<a download>`, e `⤴ Compartilhar` usa `navigator.share` com o arquivo anexado, caindo para download quando não houver compartilhamento.
 - **Offline de verdade:** pdf.js, mammoth, JSZip e pdf-lib agora são locais (`vendor/`) e entram no cache do service worker. O app abre, lê PDFs/DOCX e monta o zip e o PDF único sem internet depois da primeira visita.
-- **Exportação de repertório:** o botão ⤓ Exportar monta um `.zip` com os arquivos originais, na ordem do repertório e sem recompressão, e também um **PDF único** juntando as cifras em PDF com pdf-lib (as páginas são copiadas como estão, preservando inclusive cifras escritas à mão). Ambos com opção de baixar ou compartilhar.
+- **Exportação de repertório:** o botão ⤓ Exportar monta um `.zip` com os arquivos originais, na ordem do repertório e sem recompressão, e também um **PDF único** juntando as cifras em PDF e as imagens com pdf-lib (as páginas são copiadas como estão, preservando inclusive cifras escritas à mão; imagens viram páginas A4). Ambos com opção de baixar ou compartilhar.
 - **Importação mais segura:** limite de 100 MB por arquivo, progresso por página na leitura de PDFs, aviso de arquivo grande e trava para não importar duas vezes ao mesmo tempo.
 - **Visualizador sem canvas duplicado:** cada página só é desenhada uma vez por vez, e páginas que saíram da tela são liberadas mesmo durante o zoom.
 - **PDFs grandes sem travar:** o visualizador cria as páginas sob demanda e libera as que saem da tela. Também limita a resolução do canvas, cancela desenhos antigos ao trocar de música/zoom e destrói o documento ao fechar.
@@ -248,7 +248,7 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
   1. Avisar quais cifras ficaram de fora e deixar a escolha ao usuário.
   2. Converter no navegador, desenhando o DOCX como página. Funciona, mas o alinhamento dos acordes sobre a letra pode mudar.
   3. Usar a **conversão para PDF do próprio OneDrive**, que respeita melhor a formatação do Word. Precisa de internet e da conexão da etapa 2 (a confirmar com um arquivo seu).
-- **Implementado com o caminho 1:** o PDF único inclui somente as cifras em PDF e avisa quais DOCX/DOC ficaram de fora, sugerindo o zip. Quem quiser garantir o resultado pode guardar as cifras do repertório em PDF. O caminho 3 fica para depois do OneDrive.
+- **Implementado com o caminho 1:** o PDF único inclui as cifras em PDF e as imagens, e avisa quais DOCX/DOC ficaram de fora, sugerindo o zip. Quem quiser garantir o resultado pode guardar as cifras do repertório em PDF ou imagem. O caminho 3 fica para depois do OneDrive.
 - Acabamentos possíveis, a decidir: uma **capa ou índice** com o nome do repertório e a lista das músicas com o número da página; **marcadores** no PDF para pular entre as músicas; e um nome de arquivo automático, como `Repertório - Culto domingo.pdf`.
 
 #### Compartilhar ou baixar
@@ -260,7 +260,7 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
 
 - **Memória e tempo:** repertórios com muitas cifras ou PDFs grandes podem demorar no tablet e no iPhone. O app deve mostrar o andamento (por exemplo, “montando 5 de 12”) e não travar a tela.
 - **Tamanho do arquivo:** alguns apps de mensagem limitam o tamanho de anexos. Se o zip ou o PDF ficar grande, vale avisar o tamanho antes de enviar.
-- **Fidelidade:** o zip nunca altera os arquivos. O PDF único preserva PDFs fielmente, mas pode alterar DOCX se for convertido no navegador.
+- **Fidelidade:** o zip nunca altera os arquivos. O PDF único preserva PDFs fielmente e coloca imagens em páginas A4, mas pode alterar DOCX se for convertido no navegador.
 - **Privacidade:** tudo é montado no aparelho. Os arquivos só saem dele quando você compartilha ou baixa.
 
 ### 10.4 Onde isso entra na ordem de trabalho
@@ -268,7 +268,7 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
 A exportação trabalha com os arquivos que já estão no aparelho, então **não depende do OneDrive** e pode ser feita logo depois do teste do protótipo (seção 4). O **zip do repertório e o PDF único já estão implementados**; falta apenas, mais adiante, a conversão de DOCX para PDF pelo OneDrive. Ordem sugerida:
 
 1. **Zip do repertório**, com compartilhar e baixar. É a parte mais simples e a que menos muda os arquivos. *(feito)*
-2. **PDF único** com cifras em PDF, com aviso sobre as que são DOCX. *(feito)*
+2. **PDF único** com cifras em PDF e imagens, com aviso sobre as que são DOCX/DOC. *(feito)*
 3. **Conversão de DOCX para PDF** pelo OneDrive, depois que a etapa 2 estiver pronta.
 4. **Origem das cifras** (manual, OneDrive ou ambas), junto da conexão com o OneDrive.
 
