@@ -44,8 +44,25 @@
       <button id="zoomOut" title="Diminuir zoom" aria-label="Diminuir zoom">−</button>
       <button id="zoomIn" title="Aumentar zoom" aria-label="Aumentar zoom">+</button>
       <button id="invertBtn" title="Inverter cores" aria-label="Inverter cores">◐</button>
+      <button id="annotateBtn" title="Anotar no PDF com a caneta ou o dedo" aria-label="Anotar no PDF" hidden>✏<span class="label"> Anotar</span></button>
       <button id="downloadBtn" title="Baixar o arquivo original"><span class="label">✎ Abrir</span></button>
       <button id="shareBtn" title="Compartilhar o arquivo"><span class="label">⤴ Compartilhar</span></button>
+    </div>
+    <div class="annotation-bar" id="annotationBar" hidden>
+      <div class="annot-colors" role="group" aria-label="Cor da caneta">
+        <button class="annot-color on" data-annot-color="#111111" style="--swatch:#111111" title="Preto" aria-label="Caneta preta"></button>
+        <button class="annot-color" data-annot-color="#d11a2a" style="--swatch:#d11a2a" title="Vermelho" aria-label="Caneta vermelha"></button>
+        <button class="annot-color" data-annot-color="#1d4ed8" style="--swatch:#1d4ed8" title="Azul" aria-label="Caneta azul"></button>
+        <button class="annot-color" data-annot-color="#15803d" style="--swatch:#15803d" title="Verde" aria-label="Caneta verde"></button>
+      </div>
+      <label class="annot-size">Espessura
+        <input type="range" id="annotSize" min="1" max="10" step="1" value="3">
+      </label>
+      <button data-annot-act="undo" title="Desfazer último traço">↶ Desfazer</button>
+      <button data-annot-act="clear" title="Limpar todas as anotações desta sessão">Limpar</button>
+      <button data-annot-act="pan" id="annotPanBtn" title="Rolar a cifra sem desenhar">✋ Rolar</button>
+      <button data-annot-act="cancel" title="Sair sem salvar">Cancelar</button>
+      <button class="primary" data-annot-act="save" title="Gravar as anotações no PDF original">Salvar no PDF</button>
     </div>
     <div id="viewerBody"></div>
   </section>

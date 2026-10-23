@@ -62,6 +62,16 @@ let currentBlobSongId = null;
 let currentObjectUrl = null; // imagem aberta no visualizador
 let pendingExport = null; // { kind, filename, blob } pronto para compartilhar/baixar
 
+/* ---------- anotação no PDF ---------- */
+let annotating = false;
+let annotationColor = '#111111';
+let annotationWidth = 3;
+let annotationPan = false;
+let annotationBusy = false;
+let annotations = new Map(); // página -> [traço]
+let annotationHistory = []; // traços na ordem em que foram desenhados
+let activeAnnotation = null; // traço sendo desenhado agora
+
 /* ---------- utilidades ---------- */
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 
@@ -986,6 +996,21 @@ async function writeFileToFolder(filename, content) {
   }
 }
 
+async function writeFileByPath(path, content) {
+  if (!dirHandle) return null;
+  const parts = String(path || '').split('/').filter(Boolean);
+  if (!parts.length) return null;
+  let folder = dirHandle;
+  for (let index = 0; index < parts.length - 1; index++) {
+    folder = await folder.getDirectoryHandle(parts[index], { create: true });
+  }
+  const handle = await folder.getFileHandle(parts[parts.length - 1], { create: true });
+  const writable = await handle.createWritable();
+  await writable.write(content);
+  await writable.close();
+  return handle;
+}
+
 async function readFileFromFolder(filename) {
   if (!dirHandle) return null;
   try {
@@ -1296,7 +1321,7 @@ async function extractText(file, buffer, onPage) {
   return '';
 }
 
-async function importFiles(fileList) {
+async function importFiles(fileList, options = {}) {
   const files = Array.from(fileList || []).filter((file) => isSupportedFile(file.name));
   if (!files.length) {
     toast('Escolha arquivos PDF, DOCX, DOC, PNG ou JPG.', 'error');
@@ -1307,9 +1332,19 @@ async function importFiles(fileList) {
     return;
   }
 
+  const copyToFolder = options.copyToFolder !== false;
   importing = true;
   try {
     await requestPersistence();
+
+    let canWriteFolder = false;
+    if (copyToFolder && dirHandle) {
+      canWriteFolder = await ensureFolderPermission();
+      if (!canWriteFolder) {
+        toast('Sem permissão de escrita na pasta: as cifras serão guardadas só no app.', 'error');
+      }
+    }
+
     setProgress(0, 'Preparando importação…');
     toast('Importando ' + files.length + ' arquivo(s)…');
 
@@ -1317,6 +1352,8 @@ async function importFiles(fileList) {
     let updated = 0;
     let failed = 0;
     let withoutText = 0;
+    let savedToFolder = 0;
+    let keptInApp = 0;
 
     for (let index = 0; index < files.length; index++) {
       const file = files[index];
@@ -1341,8 +1378,11 @@ async function importFiles(fileList) {
             'Lendo ' + file.name + ' — página ' + page + ' de ' + total
           );
         });
-        existing = songs.find((song) => !song.folderPath &&
-          String(song.file || '').toLowerCase() === file.name.toLowerCase());
+        const targetName = canWriteFolder ? file.name : null;
+        existing = songs.find((song) =>
+          (targetName && song.folderPath === targetName) ||
+          (!song.folderPath && String(song.file || '').toLowerCase() === file.name.toLowerCase())
+        );
         const type = fileType(file.name) || file.name.split('.').pop().toLowerCase();
         const blob = new Blob([buffer], { type: mimeOf(file.name) });
         const now = Date.now();
@@ -1352,7 +1392,11 @@ async function importFiles(fileList) {
           type: existing.type,
           hash: existing.hash,
           updatedAt: existing.updatedAt,
-          text: existing.text
+          text: existing.text,
+          storage: existing.storage,
+          source: existing.source,
+          folderPath: existing.folderPath,
+          missing: existing.missing
         } : null;
 
         let song;
@@ -1384,7 +1428,32 @@ async function importFiles(fileList) {
         }
 
         setProgress((index + 0.9) / files.length, 'Salvando ' + file.name + '…');
-        await storeFile(song, blob, text);
+        let storedInFolder = false;
+        if (targetName) {
+          try {
+            await writeFileToFolder(targetName, blob);
+            storedInFolder = true;
+            savedToFolder++;
+          } catch (err) {
+            console.error('Falha ao gravar ' + file.name + ' na pasta', err);
+            if (existing && existing.folderPath) throw err;
+            keptInApp++;
+          }
+        }
+
+        if (storedInFolder) {
+          song.storage = 'folder';
+          song.source = 'folder';
+          song.folderPath = targetName;
+          song.missing = false;
+          await saveSongRecord(song, null, text);
+        } else {
+          song.storage = 'internal';
+          song.source = 'local';
+          song.folderPath = undefined;
+          song.missing = false;
+          await storeFile(song, blob, text);
+        }
         buildHay(song);
 
         if (existing) {
@@ -1410,6 +1479,8 @@ async function importFiles(fileList) {
     const parts = [];
     if (imported) parts.push(imported + ' importada(s)');
     if (updated) parts.push(updated + ' atualizada(s)');
+    if (savedToFolder) parts.push(savedToFolder + ' na pasta');
+    if (keptInApp) parts.push(keptInApp + ' só no app');
     if (withoutText) parts.push(withoutText + ' sem texto pesquisável');
     if (failed) parts.push(failed + ' com erro');
     toast(parts.length ? parts.join(' · ') : 'Nenhum arquivo foi importado.', failed ? 'error' : '');
@@ -1492,7 +1563,9 @@ function renderLibrary() {
     </div>
     <p class="hint folder-line">
       ${folderName
-        ? `Pasta: <strong>${esc(folderName)}</strong> · ${mapped} arquivo(s) listado(s)${dirHandle ? '' : ' · acesso precisa ser liberado'}`
+        ? `Pasta: <strong>${esc(folderName)}</strong> · ${mapped} arquivo(s) listado(s)${dirHandle
+          ? ' · importações e banco (<strong>cifras-backup.json</strong>) salvos nesta pasta'
+          : ' · acesso precisa ser liberado'}`
         : 'Escolha a pasta do tablet para listar PDF, DOCX, DOC e imagens sem importar.'}
     </p>
     ${songs.length ? `<div class="chips">${['★', ...tags].map((tagName) => `
@@ -2251,6 +2324,9 @@ async function openViewer() {
 }
 
 function closeViewer() {
+  if (annotating && annotationHistory.length &&
+    !confirm('Descartar as anotações que ainda não foram salvas?')) return;
+  stopAnnotating();
   viewerOpen = false;
   renderGeneration++;
   resetPdf();
@@ -2273,6 +2349,7 @@ async function showSong() {
     closeViewer();
     return;
   }
+  if (annotating) stopAnnotating();
 
   const token = ++renderGeneration;
   resetPdf();
@@ -2289,10 +2366,12 @@ async function showSong() {
   $('#viewerTitle').textContent =
     (queue.length > 1 ? (qi + 1) + '/' + queue.length + ' · ' : '') +
     song.name + (song.key ? ' · ' + song.key : '');
+  updateAnnotateButton(song);
 
   if (song.missing) {
     body.innerHTML = '<div class="viewer-msg">O arquivo não está mais na pasta.<br>' +
       'Se ele foi movido ou renomeado, toque em “📁 Pasta das cifras” e depois em “Atualizar lista”.</div>';
+    updateAnnotateButton(song);
     return;
   }
 
@@ -2310,6 +2389,7 @@ async function showSong() {
       ? '<div class="viewer-msg">O arquivo não foi encontrado na pasta.<br>' +
         'Toque em “📁 Pasta das cifras” e depois em “Atualizar lista”.</div>'
       : '<div class="viewer-msg">O arquivo não foi encontrado neste aparelho.<br>Importe novamente.</div>';
+    updateAnnotateButton(song);
     return;
   }
 
@@ -2347,6 +2427,7 @@ async function showSong() {
       body.innerHTML = '<div class="viewer-msg">Arquivos .doc antigos não abrem no navegador.<br>' +
         'Use “✎ Abrir” para baixar e edite no Word, salvando como .docx ou PDF.</div>';
     }
+    updateAnnotateButton(song);
 
     // Prepara a busca pelo texto aos poucos, sem atrasar a abertura.
     if (song.folderPath && !song.text && (song.type === 'pdf' || song.type === 'docx')) {
@@ -2526,6 +2607,9 @@ async function renderPage(page, token, force) {
     }
 
     if (renderedPages.get(pageNumber) === record) record.task = null;
+    if (annotating) {
+      try { ensureAnnotationLayer(page); } catch (e) { /* ignore */ }
+    }
   } finally {
     renderingPages.delete(renderKey);
   }
@@ -2576,9 +2660,15 @@ function refreshZoom() {
     applyImageZoom();
   }
 
-  requestAnimationFrame(() => {
-    body.scrollTop = ratio * Math.max(0, body.scrollHeight - body.clientHeight);
-  });
+  for (const page of pageElements) {
+    const layer = page.querySelector('.annotation-layer');
+    if (layer && annotating) {
+      try {
+        sizeAnnotationLayer(layer);
+        drawAnnotationLayer(layer);
+      } catch (e) { /* ignore */ }
+    }
+  }
 }
 
 function applyImageZoom() {
@@ -2593,12 +2683,315 @@ function changeZoom(delta) {
   refreshZoom();
 }
 
-function stepSong(delta) {
-  if (!viewerOpen) return;
-  const next = qi + delta;
-  if (next < 0 || next >= queue.length) return;
-  qi = next;
-  showSong();
+function updateAnnotateButton(song) {
+  const btn = $('#annotateBtn');
+  if (!btn) return;
+  const can = Boolean(song && song.type === 'pdf' && !song.missing);
+  btn.hidden = !can;
+  btn.classList.toggle('on', Boolean(can && annotating));
+}
+
+function stopAnnotating() {
+  if (!annotating && !$('#annotationBar').hidden) {
+    $('#annotationBar').hidden = true;
+  }
+  if (!annotating) {
+    document.body.classList.remove('is-annotating');
+    document.body.classList.remove('annotation-panning');
+    return;
+  }
+  annotating = false;
+  annotationBusy = false;
+  activeAnnotation = null;
+  document.body.classList.remove('is-annotating');
+  document.body.classList.remove('annotation-panning');
+  const bar = $('#annotationBar');
+  if (bar) bar.hidden = true;
+  const btn = $('#annotateBtn');
+  if (btn) btn.classList.remove('on');
+  for (const page of pageElements) {
+    const layer = page.querySelector('.annotation-layer');
+    if (layer) layer.remove();
+  }
+}
+
+function startAnnotating() {
+  const song = currentSong();
+  if (!song || song.type !== 'pdf' || song.missing) {
+    toast('Anotação disponível apenas para PDFs abertos.');
+    return;
+  }
+  if (!currentDoc || !pageElements.length) {
+    toast('Aguarde a cifra carregar para anotar.');
+    return;
+  }
+  stopAnnotating();
+  annotating = true;
+  annotationPan = false;
+  annotationHistory = [];
+  annotations = new Map();
+  activeAnnotation = null;
+  document.body.classList.add('is-annotating');
+  document.body.classList.remove('annotation-panning');
+  const bar = $('#annotationBar');
+  if (bar) bar.hidden = false;
+  const pan = $('#annotPanBtn');
+  if (pan) pan.classList.remove('on');
+  updateAnnotateButton(song);
+  for (const page of pageElements) {
+    ensureAnnotationLayer(page);
+  }
+  toast('Modo de anotação. Escreva com o dedo ou a caneta. Toque em “Salvar no PDF” para gravar.');
+}
+
+function sizeAnnotationLayer(layer) {
+  const page = layer.closest('.pdf-page');
+  if (!page) return;
+  const rect = page.getBoundingClientRect();
+  if (rect.width < 8 || rect.height < 8) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const scale = Math.min(dpr, 2800 / Math.max(rect.width, rect.height));
+  const w = Math.max(1, Math.round(rect.width * scale));
+  const h = Math.max(1, Math.round(rect.height * scale));
+  if (layer.width !== w || layer.height !== h) {
+    layer.width = w;
+    layer.height = h;
+  }
+}
+
+function getAnnotationLayerCtx(layer) {
+  return layer.getContext('2d');
+}
+
+function drawAnnotationStrokes(ctx, canvas, strokes) {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  for (const stroke of strokes || []) {
+    if (!stroke || !stroke.points || !stroke.points.length) continue;
+    ctx.strokeStyle = stroke.color;
+    ctx.fillStyle = stroke.color;
+    ctx.lineWidth = Math.max(1, stroke.width * canvas.width);
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    if (stroke.points.length === 1) {
+      const p = stroke.points[0];
+      ctx.beginPath();
+      ctx.arc(p.x * canvas.width, p.y * canvas.height, Math.max(0.8, ctx.lineWidth / 2), 0, Math.PI * 2);
+      ctx.fill();
+      continue;
+    }
+    ctx.beginPath();
+    stroke.points.forEach((point, index) => {
+      const x = point.x * canvas.width;
+      const y = point.y * canvas.height;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  }
+}
+
+function drawAnnotationLayer(layer) {
+  if (!layer) return;
+  const page = layer.closest('.pdf-page');
+  if (!page) return;
+  const pageNumber = Number(page.dataset.page);
+  const strokes = annotations.get(pageNumber) || [];
+  const ctx = getAnnotationLayerCtx(layer);
+  drawAnnotationStrokes(ctx, layer, strokes);
+}
+
+function ensureAnnotationLayer(page) {
+  if (!annotating) return null;
+  let layer = page.querySelector('.annotation-layer');
+  if (!layer) {
+    layer = document.createElement('canvas');
+    layer.className = 'annotation-layer';
+    layer.setAttribute('aria-label', 'Camada de anotação');
+    layer.addEventListener('pointerdown', onAnnotationPointerDown);
+    page.appendChild(layer);
+  }
+  page.appendChild(layer);
+  sizeAnnotationLayer(layer);
+  drawAnnotationLayer(layer);
+  return layer;
+}
+
+function redrawAllAnnotations() {
+  for (const page of pageElements) {
+    const layer = page.querySelector('.annotation-layer');
+    if (layer) {
+      sizeAnnotationLayer(layer);
+      drawAnnotationLayer(layer);
+    }
+  }
+}
+
+function undoAnnotation() {
+  const entry = annotationHistory.pop();
+  if (!entry) return;
+  const strokes = annotations.get(entry.pageNumber);
+  if (!strokes) return;
+  const idx = strokes.lastIndexOf(entry.stroke);
+  if (idx >= 0) strokes.splice(idx, 1);
+  if (!strokes.length) annotations.delete(entry.pageNumber);
+  const page = document.querySelector('.pdf-page[data-page="' + entry.pageNumber + '"]');
+  const layer = page && page.querySelector('.annotation-layer');
+  if (layer) {
+    sizeAnnotationLayer(layer);
+    drawAnnotationLayer(layer);
+  }
+}
+
+function clearAnnotations() {
+  if (!annotations.size) return;
+  if (!confirm('Limpar todas as anotações desta sessão?')) return;
+  annotations.clear();
+  annotationHistory = [];
+  activeAnnotation = null;
+  redrawAllAnnotations();
+}
+
+function toggleAnnotationPan() {
+  annotationPan = !annotationPan;
+  document.body.classList.toggle('annotation-panning', annotationPan);
+  const pan = $('#annotPanBtn');
+  if (pan) pan.classList.toggle('on', annotationPan);
+}
+
+function onAnnotationPointerDown(event) {
+  if (!annotating || annotationPan || annotationBusy) return;
+  if (event.button !== undefined && event.button !== 0 && event.button !== -1) return;
+  const layer = event.currentTarget;
+  const page = layer.closest('.pdf-page');
+  if (!page) return;
+  const pageNumber = Number(page.dataset.page);
+  event.preventDefault();
+  const rect = layer.getBoundingClientRect();
+  const x = (event.clientX - rect.left) / Math.max(1, rect.width);
+  const y = (event.clientY - rect.top) / Math.max(1, rect.height);
+  const stroke = { color: annotationColor, width: Math.max(0.001, annotationWidth / Math.max(1, rect.width)), points: [{ x, y }] };
+  if (!annotations.has(pageNumber)) annotations.set(pageNumber, []);
+  annotations.get(pageNumber).push(stroke);
+  annotationHistory.push({ pageNumber, stroke });
+  activeAnnotation = { pageNumber, stroke, layer, pointerId: event.pointerId };
+  try { layer.setPointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+  sizeAnnotationLayer(layer);
+  drawAnnotationLayer(layer);
+}
+
+function onAnnotationPointerMove(event) {
+  if (!activeAnnotation || !annotating || annotationPan) return;
+  if (event.pointerId !== activeAnnotation.pointerId) return;
+  event.preventDefault();
+  const layer = activeAnnotation.layer;
+  const rect = layer.getBoundingClientRect();
+  const x = (event.clientX - rect.left) / Math.max(1, rect.width);
+  const y = (event.clientY - rect.top) / Math.max(1, rect.height);
+  activeAnnotation.stroke.points.push({ x, y });
+  drawAnnotationLayer(layer);
+}
+
+function onAnnotationPointerUp(event) {
+  if (!activeAnnotation || event.pointerId !== activeAnnotation.pointerId) return;
+  try { activeAnnotation.layer.releasePointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+  activeAnnotation = null;
+}
+
+async function renderAnnotationPng(strokes, width, height) {
+  const scale = Math.min(2, Math.max(1, 2800 / Math.max(width, height)));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(width * scale));
+  canvas.height = Math.max(1, Math.round(height * scale));
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('canvas');
+  drawAnnotationStrokes(ctx, canvas, strokes);
+  const blob = await new Promise((resolve, reject) => {
+    try { canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('png'))), 'image/png'); }
+    catch (e) { reject(e); }
+  });
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
+async function persistUpdatedBlob(song, blob) {
+  const path = song.folderPath || (song.storage === 'folder' ? song.file : null);
+  if (path) {
+    if (!dirHandle) throw new Error('Pasta não conectada.');
+    const ok = await ensureFolderPermission();
+    if (!ok) throw new Error('Sem permissão de escrita na pasta.');
+    await writeFileByPath(path, blob);
+    song.storage = 'folder';
+    song.folderPath = path;
+    song.size = blob.size;
+    song.missing = false;
+    song.updatedAt = Date.now();
+    await saveMeta(song);
+    scheduleBackup();
+    return 'folder';
+  }
+  song.storage = 'internal';
+  song.folderPath = undefined;
+  song.size = blob.size;
+  song.updatedAt = Date.now();
+  await saveSongRecord(song, blob, song.text || '');
+  return 'internal';
+}
+
+async function saveAnnotations() {
+  const song = currentSong();
+  if (!song || song.type !== 'pdf') return;
+  if (annotationBusy) return;
+  const pagesWithStrokes = [];
+  for (const [pageNumber, strokes] of annotations.entries()) {
+    if (strokes && strokes.length) pagesWithStrokes.push([pageNumber, strokes]);
+  }
+  if (!pagesWithStrokes.length) {
+    toast('Desenhe algo antes de salvar.');
+    return;
+  }
+  if (!window.PDFLib) {
+    toast('Biblioteca PDF não carregada.', 'error');
+    return;
+  }
+  annotationBusy = true;
+  setProgress(0.05, 'Aplicando anotações no PDF...');
+  try {
+    if (!currentBlob) {
+      currentBlob = await loadFile(song);
+      if (!currentBlob) throw new Error('Arquivo não encontrado');
+    }
+    const source = await currentBlob.arrayBuffer();
+    const pdfDoc = await window.PDFLib.PDFDocument.load(source);
+    const pages = pdfDoc.getPages();
+    for (let i = 0; i < pagesWithStrokes.length; i++) {
+      const [pageNumber, strokes] = pagesWithStrokes[i];
+      const page = pages[pageNumber - 1];
+      if (!page) continue;
+      const frac = 0.05 + (i / Math.max(1, pagesWithStrokes.length)) * 0.5;
+      setProgress(frac, 'Gerando anotação ' + (i + 1) + '/' + pagesWithStrokes.length + '…');
+      const pngBytes = await renderAnnotationPng(strokes, page.getWidth(), page.getHeight());
+      const png = await pdfDoc.embedPng(pngBytes);
+      page.drawImage(png, { x: 0, y: 0, width: page.getWidth(), height: page.getHeight() });
+    }
+    setProgress(0.65, 'Gravando no arquivo original...');
+    const out = await pdfDoc.save();
+    const blob = new Blob([out], { type: 'application/pdf' });
+    await persistUpdatedBlob(song, blob);
+    currentBlob = blob;
+    currentBlobSongId = song.id;
+    annotations.clear();
+    annotationHistory = [];
+    activeAnnotation = null;
+    stopAnnotating();
+    await showSong();
+    setProgress(null);
+    toast('Anotações salvas no arquivo original.');
+  } catch (err) {
+    console.error('Falha ao salvar anotações', err);
+    setProgress(null);
+    toast('Não foi possível salvar as anotações.', 'error');
+  } finally {
+    annotationBusy = false;
+  }
 }
 
 function downloadBlob(blob, filename) {
@@ -2723,7 +3116,7 @@ function bindEvents() {
   const folderInput = $('#folderInput');
   if (folderInput) {
     folderInput.addEventListener('change', (event) => {
-      importFiles(event.target.files);
+      importFiles(event.target.files, { copyToFolder: false });
       event.target.value = '';
     });
   }
@@ -3008,6 +3401,41 @@ function bindEvents() {
     resizeTimer = setTimeout(refreshZoom, 200);
   });
 
+  window.addEventListener('pointermove', onAnnotationPointerMove);
+  window.addEventListener('pointerup', onAnnotationPointerUp);
+  window.addEventListener('pointercancel', onAnnotationPointerUp);
+
+  const annotateBtn = $('#annotateBtn');
+  if (annotateBtn) annotateBtn.addEventListener('click', startAnnotating);
+
+  const annotBar = $('#annotationBar');
+  if (annotBar) {
+    annotBar.addEventListener('click', (event) => {
+      const color = event.target.closest('[data-annot-color]');
+      if (color) {
+        annotBar.querySelectorAll('[data-annot-color]').forEach((btn) => btn.classList.toggle('on', btn === color));
+        annotationColor = color.dataset.annotColor;
+        return;
+      }
+      const act = event.target.closest('[data-annot-act]');
+      if (!act) return;
+      const action = act.dataset.annotAct;
+      if (action === 'undo') undoAnnotation();
+      else if (action === 'clear') clearAnnotations();
+      else if (action === 'pan') toggleAnnotationPan();
+      else if (action === 'cancel') {
+        if (annotationHistory.length && !confirm('Descartar as anotações não salvas?')) return;
+        stopAnnotating();
+      } else if (action === 'save') saveAnnotations();
+    });
+    const size = $('#annotSize');
+    if (size) {
+      size.addEventListener('input', () => {
+        annotationWidth = Number(size.value) || 3;
+      });
+    }
+  }
+
   window.addEventListener('dragover', (event) => event.preventDefault());
   window.addEventListener('drop', (event) => {
     event.preventDefault();
@@ -3095,3 +3523,21 @@ async function init() {
 }
 
 init();
+
+/* Debug/test exposure */
+try {
+  Object.defineProperty(window, 'dirHandle', { get: function() { return dirHandle; }, set: function(v) { dirHandle = v; }, configurable: true });
+  Object.defineProperty(window, 'songs', { get: function() { return songs; }, set: function(v) { songs = v; }, configurable: true });
+  Object.defineProperty(window, 'lists', { get: function() { return lists; }, set: function(v) { lists = v; }, configurable: true });
+  Object.defineProperty(window, 'queue', { get: function() { return queue; }, set: function(v) { queue = v; }, configurable: true });
+  Object.defineProperty(window, 'qi', { get: function() { return qi; }, set: function(v) { qi = v; }, configurable: true });
+  Object.defineProperty(window, 'openViewer', { get: function() { return openViewer; }, configurable: true });
+  Object.defineProperty(window, 'closeViewer', { get: function() { return closeViewer; }, configurable: true });
+  Object.defineProperty(window, 'importFiles', { get: function() { return importFiles; }, configurable: true });
+  Object.defineProperty(window, 'startAnnotating', { get: function() { return startAnnotating; }, configurable: true });
+  Object.defineProperty(window, 'stopAnnotating', { get: function() { return stopAnnotating; }, configurable: true });
+  Object.defineProperty(window, 'saveAnnotations', { get: function() { return saveAnnotations; }, configurable: true });
+  Object.defineProperty(window, 'annotationHistory', { get: function() { return annotationHistory; }, set: function(v) { annotationHistory = v; }, configurable: true });
+  Object.defineProperty(window, 'annotations', { get: function() { return annotations; }, set: function(v) { annotations = v; }, configurable: true });
+  Object.defineProperty(window, 'annotating', { get: function() { return annotating; }, set: function(v) { annotating = v; }, configurable: true });
+} catch (e) {}
