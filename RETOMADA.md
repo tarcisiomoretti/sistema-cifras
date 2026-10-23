@@ -29,7 +29,12 @@
   etiquetas, favoritas e repertórios.
 - Importação manual continua disponível como alternativa (PDF, DOC, DOCX, PNG, JPG)
   e como cópia no armazenamento interno.
-- O `sw.js` foi para **`cifras-v7`**.
+- **Repertórios recolhíveis.** Cada repertório aparece fechado; ao tocar no nome,
+  ele expande e mostra todas as músicas. O botão **Editar** abre o repertório e
+  libera a busca para adicionar músicas.
+- **Reordenar arrastando.** No modo de edição, arraste pelo ícone **⠿** para
+  mudar a ordem das músicas (funciona com toque no tablet e com o mouse).
+- O `sw.js` foi para **`cifras-v8`**.
 
 ## Como testar no tablet
 
@@ -40,6 +45,8 @@
 5. Abrir um PDF, um DOCX e uma imagem.
 6. Fechar e abrir o app; se o navegador pedir, tocar em **📁 → Reconectar**.
 7. Colocar um arquivo novo na pasta e tocar em **📁 → Atualizar lista**.
+8. Em **Repertórios**, tocar no nome de um repertório para expandir; tocar em
+   **Editar** e arrastar pelo **⠿** para conferir a nova ordem.
 
 ## Pendências conhecidas / decisões em aberto
 
@@ -61,7 +68,7 @@
 ## Fluxo de publicação (lembrete)
 
 1. Alterar os arquivos.
-2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v7`).
+2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v8`).
 3. `git commit` + `git push origin main`.
 4. O GitHub Pages publica sozinho em ~1 minuto.
 

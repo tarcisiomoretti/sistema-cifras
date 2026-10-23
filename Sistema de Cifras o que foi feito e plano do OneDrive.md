@@ -36,9 +36,9 @@ A versão corrigida está nesta pasta, separada em arquivos (`index.html`, `styl
 ### Repertórios
 
 - Criar listas por culto e dar nome a elas.
-- Cada repertório mostra suas músicas direto na lista. **Tocar numa cifra abre ela na hora.**
+- Cada repertório aparece recolhido; ao tocar no nome, mostra todas as suas músicas. **Tocar numa cifra abre ela na hora.**
 - O botão **▶ Tocar** abre o repertório inteiro em sequência.
-- O botão **Editar** do repertório permite adicionar, reordenar (↑ ↓) e remover músicas.
+- O botão **Editar** do repertório permite adicionar, reordenar (arrastando pelo ícone ⠿) e remover músicas.
 - Para adicionar, há um campo de busca com **filtro ao digitar**: aparecem as músicas que combinam, com o tom e um botão ＋.
 - O botão **⤓ Exportar** monta um `.zip` com os arquivos originais na ordem do repertório (`01 - Nome.pdf`), para baixar ou compartilhar.
 - O mesmo botão oferece o **PDF único**: junta as cifras em PDF num só arquivo, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular. As cifras DOCX/DOC ficam de fora, com aviso.

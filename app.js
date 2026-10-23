@@ -35,6 +35,8 @@ let view = 'lib';
 let q = '';
 let tag = '';
 let openList = null;
+let editingList = null;
+let dragState = null;
 const addQ = {};
 
 let queue = [];
@@ -973,6 +975,7 @@ async function loadAll() {
     .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0) || a.name.localeCompare(b.name, 'pt'));
 
   if (openList && !listById(openList)) openList = null;
+  if (editingList && !listById(editingList)) editingList = null;
 }
 
 /* ============================================================
@@ -1257,20 +1260,22 @@ function addResultsHtml(list) {
 }
 
 function listCard(list) {
-  const editing = openList === list.id;
+  const expanded = openList === list.id;
+  const editing = expanded && editingList === list.id;
   const rows = list.items.map((songId, index) => {
     const song = songById(songId);
     if (!song) return '';
-    return `<div class="row" data-list="${list.id}" data-song="${song.id}" data-index="${index}">
-      <span class="index">${index + 1}</span>
+    return `<div class="row ${editing ? 'editing' : ''}" data-list="${list.id}" data-song="${song.id}" data-index="${index}">
+      ${editing
+        ? `<button class="drag-handle" data-drag-handle aria-label="Arraste para reordenar ${esc(song.name)}"
+            title="Arraste para reordenar">⠿</button>`
+        : `<span class="index">${index + 1}</span>`}
       <button class="main" data-act="play-list-song" data-list="${list.id}" data-index="${index}">
         <span class="name">${esc(song.name)}</span>
         <span class="sub">${esc(song.artist || (song.type ? song.type.toUpperCase() : ''))}</span>
       </button>
       ${song.key ? `<span class="key">${esc(song.key)}</span>` : ''}
       ${editing ? `<div class="actions">
-        <button class="icon-btn" data-act="move-up" data-list="${list.id}" data-index="${index}" aria-label="Subir">↑</button>
-        <button class="icon-btn" data-act="move-down" data-list="${list.id}" data-index="${index}" aria-label="Descer">↓</button>
         <button class="icon-btn danger" data-act="remove-from-list" data-list="${list.id}" data-index="${index}" aria-label="Remover do repertório">✕</button>
       </div>` : ''}
     </div>`;
@@ -1278,21 +1283,22 @@ function listCard(list) {
 
   return `<div class="list-card">
     <div class="row list-head" data-list="${list.id}">
-      <button class="main" data-act="toggle-list" data-list="${list.id}" aria-expanded="${editing}">
-        <span class="name">${esc(list.name)}</span>
-        <span class="sub">${list.items.length} música(s)${editing ? ' · editando' : ''}</span>
+      <button class="main" data-act="toggle-list" data-list="${list.id}" aria-expanded="${expanded}">
+        <span class="name"><span class="list-caret" aria-hidden="true">${expanded ? '▾' : '▸'}</span> ${esc(list.name)}</span>
+        <span class="sub">${list.items.length} música(s)${editing ? ' · editando' : (expanded ? '' : ' · toque para abrir')}</span>
       </button>
       <div class="actions">
         <button class="primary" data-act="play-list" data-list="${list.id}" aria-label="Tocar repertório">▶<span class="label"> Tocar</span></button>
-        <button data-act="toggle-list" data-list="${list.id}">${editing ? 'Concluir' : 'Editar'}</button>
+        <button data-act="edit-list" data-list="${list.id}">${editing ? 'Concluir' : 'Editar'}</button>
         <button data-act="export-list" data-list="${list.id}" ${list.items.length ? '' : 'disabled'}
           aria-label="Exportar repertório em zip" title="Exportar repertório">⤓<span class="label"> Exportar</span></button>
         <button class="danger" data-act="delete-list" data-list="${list.id}" aria-label="Excluir repertório">🗑</button>
       </div>
     </div>
-    ${rows
-      ? `<div class="list-songs">${rows}</div>`
-      : '<div class="empty" style="padding:22px 12px">Repertório vazio. Toque em Editar para adicionar músicas.</div>'}
+    ${expanded ? (rows
+      ? `<div class="list-songs">${rows}</div>
+        ${editing ? '<p class="hint drag-hint">Arraste pelo ⠿ para reordenar. Toque em ✕ para remover.</p>' : ''}`
+      : '<div class="empty" style="padding:22px 12px">Repertório vazio. Toque em Editar para adicionar músicas.</div>') : ''}
     ${editing ? `<div class="add-box">
       <input type="search" data-addq="${list.id}" placeholder="Digite para buscar e adicionar…"
         value="${esc(addQ[list.id] || '')}" autocomplete="off" aria-label="Buscar músicas para adicionar">
@@ -1378,6 +1384,7 @@ async function createList() {
     await putOne('lists', list);
     lists.push(list);
     openList = list.id;
+    editingList = list.id;
     rememberOpenList();
     addQ[list.id] = '';
     render();
@@ -1398,16 +1405,34 @@ function rememberOpenList() {
   } catch (err) { /* ignore */ }
 }
 
+function focusAddField(listId) {
+  requestAnimationFrame(() => {
+    const field = document.querySelector('[data-addq="' + listId + '"]');
+    if (field) field.focus();
+  });
+}
+
 async function toggleList(list) {
-  openList = openList === list.id ? null : list.id;
+  const opening = openList !== list.id;
+  openList = opening ? list.id : null;
+  if (!opening && editingList === list.id) editingList = null;
+  if (opening && editingList && editingList !== list.id) editingList = null;
   rememberOpenList();
   render();
-  if (openList) {
-    requestAnimationFrame(() => {
-      const field = document.querySelector('[data-addq="' + list.id + '"]');
-      if (field) field.focus();
-    });
+}
+
+async function toggleEditList(list) {
+  if (editingList === list.id) {
+    editingList = null;
+    render();
+    return;
   }
+  openList = list.id;
+  editingList = list.id;
+  rememberOpenList();
+  if (!addQ[list.id]) addQ[list.id] = '';
+  render();
+  focusAddField(list.id);
 }
 
 async function addToLibraryList(list, songId) {
@@ -1418,29 +1443,45 @@ async function addToLibraryList(list, songId) {
     await putOne('lists', list);
     addQ[list.id] = '';
     render();
-    requestAnimationFrame(() => {
-      const field = document.querySelector('[data-addq="' + list.id + '"]');
-      if (field) field.focus();
-    });
+    focusAddField(list.id);
   } catch (err) {
     console.error(err);
     toast('Não foi possível adicionar a música.', 'error');
   }
 }
 
-async function moveListItem(list, index, direction) {
-  const target = index + direction;
-  if (target < 0 || target >= list.items.length) return;
-  const temp = list.items[index];
-  list.items[index] = list.items[target];
-  list.items[target] = temp;
+function dragAfterRow(container, y, draggedRow) {
+  const rows = Array.from(container.querySelectorAll('.row[data-index]'))
+    .filter((row) => row !== draggedRow && !row.classList.contains('dragging'));
+  let closest = { offset: -Infinity, row: null };
+  for (const row of rows) {
+    const box = row.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    if (offset < 0 && offset > closest.offset) {
+      closest = { offset, row };
+    }
+  }
+  return closest.row;
+}
+
+async function reorderList(list, orderedIds) {
+  const visible = new Set(orderedIds);
+  let next = 0;
+  const items = list.items.map((id) => (visible.has(id) ? orderedIds[next++] : id));
+  if (items.every((id, index) => id === list.items[index])) {
+    render();
+    return;
+  }
+  list.items = items;
   list.updatedAt = Date.now();
   try {
     await putOne('lists', list);
     render();
+    toast('Ordem atualizada.');
   } catch (err) {
     console.error(err);
-    toast('Não foi possível reordenar.', 'error');
+    render();
+    toast('Não foi possível salvar a nova ordem.', 'error');
   }
 }
 
@@ -1465,6 +1506,7 @@ async function deleteList(list) {
       openList = null;
       rememberOpenList();
     }
+    if (editingList === list.id) editingList = null;
     render();
     toast('Repertório excluído.');
   } catch (err) {
@@ -2460,6 +2502,9 @@ function bindEvents() {
         case 'toggle-list':
           if (list) await toggleList(list);
           break;
+        case 'edit-list':
+          if (list) await toggleEditList(list);
+          break;
         case 'play-list':
           if (list) playList(list);
           break;
@@ -2474,12 +2519,6 @@ function bindEvents() {
           break;
         case 'add-to-list':
           if (list && song) await addToLibraryList(list, song.id);
-          break;
-        case 'move-up':
-          if (list && index >= 0) await moveListItem(list, index, -1);
-          break;
-        case 'move-down':
-          if (list && index >= 0) await moveListItem(list, index, 1);
           break;
         case 'remove-from-list':
           if (list && index >= 0) await removeListItem(list, index);
@@ -2502,6 +2541,63 @@ function bindEvents() {
     const box = main.querySelector('[data-results="' + listId + '"]');
     if (list && box) box.innerHTML = addResultsHtml(list);
   });
+
+  /* Arrastar e soltar para reordenar (funciona com toque e mouse). */
+  main.addEventListener('pointerdown', (event) => {
+    if (dragState) return;
+    const handle = event.target.closest('[data-drag-handle]');
+    if (!handle) return;
+    const row = handle.closest('.row[data-index]');
+    const container = row ? row.parentElement : null;
+    const listEl = row ? row.closest('[data-list]') : null;
+    const list = listEl ? listById(listEl.dataset.list) : null;
+    if (!row || !container || !list || editingList !== list.id) return;
+
+    event.preventDefault();
+    dragState = {
+      row,
+      list,
+      container,
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      moved: false
+    };
+    row.classList.add('dragging');
+    document.body.classList.add('dragging-row');
+    try {
+      handle.setPointerCapture(event.pointerId);
+    } catch (err) { /* ignore */ }
+  });
+
+  window.addEventListener('pointermove', (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    event.preventDefault();
+    if (Math.abs(event.clientY - dragState.startY) > 3) dragState.moved = true;
+
+    const edge = 64;
+    if (event.clientY < edge) window.scrollBy(0, -14);
+    else if (event.clientY > window.innerHeight - edge) window.scrollBy(0, 14);
+
+    const after = dragAfterRow(dragState.container, event.clientY, dragState.row);
+    if (after !== dragState.row.nextElementSibling) {
+      dragState.container.insertBefore(dragState.row, after);
+    }
+  });
+
+  const finishDrag = async (event) => {
+    if (!dragState || event.pointerId !== dragState.pointerId) return;
+    const state = dragState;
+    dragState = null;
+    state.row.classList.remove('dragging');
+    document.body.classList.remove('dragging-row');
+    if (!state.moved) return;
+
+    const orderedIds = Array.from(state.container.querySelectorAll('.row[data-index]'))
+      .map((row) => row.dataset.song);
+    await reorderList(state.list, orderedIds);
+  };
+  window.addEventListener('pointerup', finishDrag);
+  window.addEventListener('pointercancel', finishDrag);
 
   main.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && event.target.id === 'newListName') {

@@ -10,7 +10,8 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 - Importar PDF, DOCX, DOC, PNG e JPG avulsos (arrastando ou pelo botão), como alternativa quando o navegador não permite mapear uma pasta.
 - Busca instantânea por nome, artista, tom, etiqueta e texto da letra (todas as páginas dos PDFs; a busca pelo texto é preparada aos poucos, ao abrir cada cifra, ou pelo botão **Preparar busca pelo texto**).
 - Etiquetas, favoritas e edição de nome/artista/tom.
-- Repertórios com adicionar, reordenar, remover e tocar em sequência.
+- Repertórios recolhíveis: toque no nome para expandir e ver todas as músicas.
+- Repertórios com adicionar, arrastar para reordenar, remover e tocar em sequência.
 - Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF, para baixar ou compartilhar.
 - Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música e atalhos de teclado.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.

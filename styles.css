@@ -151,10 +151,38 @@ main {
 /* ---------- repertórios ---------- */
 .list-card { margin-bottom: 22px; }
 .list-head { background: var(--ch); }
-.list-head .main { cursor: default; }
+.list-head .main { cursor: pointer; }
+.list-caret { color: var(--mu); font-size: 12px; }
+.list-head .main[aria-expanded="true"] .list-caret { color: var(--ac); }
 .list-songs { margin-top: 6px; }
 .list-songs .row { margin-bottom: 6px; }
 .list-songs .index { width: 24px; text-align: center; font-weight: 600; color: var(--mu); flex-shrink: 0; }
+.drag-handle {
+  background: none;
+  border: 0;
+  padding: 6px 8px;
+  min-width: 34px;
+  min-height: 38px;
+  font-size: 20px;
+  line-height: 1;
+  color: var(--mu);
+  cursor: grab;
+  touch-action: none;
+  flex-shrink: 0;
+}
+.drag-handle:active { cursor: grabbing; }
+.drag-hint { margin: 2px 4px 10px; }
+.row.dragging {
+  position: relative;
+  z-index: 2;
+  background: var(--ch);
+  box-shadow: 0 8px 22px #00000038;
+  opacity: 0.92;
+}
+body.dragging-row {
+  user-select: none;
+  -webkit-user-select: none;
+}
 .add-box { margin-top: 8px; }
 .add-box input { margin-bottom: 6px; }
 .add-results .row { margin-bottom: 4px; }
