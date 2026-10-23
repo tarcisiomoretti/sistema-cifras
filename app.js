@@ -12,7 +12,7 @@ const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => Array.from(document.querySelectorAll(selector));
 
 const DB_NAME = 'cifras';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 const THEME_KEY = 'cifras-theme';
 const OPEN_LIST_KEY = 'cifras-open-list';
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB por arquivo
@@ -26,7 +26,8 @@ const mem = {
   songs: new Map(),
   lists: new Map(),
   files: new Map(),
-  texts: new Map()
+  texts: new Map(),
+  originals: new Map()
 };
 
 let songs = [];
@@ -162,6 +163,18 @@ function baseName(filename) {
     .trim();
 }
 
+function comparablePath(value) {
+  return String(value || '')
+    .replace(/\\/g, '/')
+    .replace(/^\/+|\/+$/g, '')
+    .normalize('NFC')
+    .toLowerCase();
+}
+
+function comparableName(value) {
+  return String(value || '').normalize('NFC').toLowerCase();
+}
+
 function sanitizeFileName(value, fallback = 'cifra') {
   let name = String(value == null ? '' : value)
     .replace(/[\\/:*?"<>|\u0000-\u001f]/g, '-')
@@ -276,6 +289,9 @@ function openDB() {
       }
       if (!database.objectStoreNames.contains('texts')) {
         database.createObjectStore('texts', { keyPath: 'id' });
+      }
+      if (!database.objectStoreNames.contains('originals')) {
+        database.createObjectStore('originals', { keyPath: 'id' });
       }
       if (!database.objectStoreNames.contains('handles')) {
         database.createObjectStore('handles');
@@ -639,12 +655,147 @@ async function getFileByPath(path) {
   }
 }
 
+function originalPathForSong(song) {
+  if (!song || !song.folderPath) return null;
+  return ORIGINALS_DIR + '/' + song.folderPath;
+}
+
+async function originalBlobForSong(song) {
+  if (!song) return null;
+  const path = originalPathForSong(song);
+  if (path && dirHandle) {
+    const file = await getFileByPath(path);
+    if (file) return file;
+  }
+  try {
+    const record = await getOne('originals', song.id);
+    return record && record.blob ? record.blob : null;
+  } catch (err) {
+    return null;
+  }
+}
+
+async function ensureOriginalBackup(song, blob) {
+  if (!song || !blob) return false;
+  const path = originalPathForSong(song);
+  if (path && dirHandle) {
+    const existing = await getFileByPath(path);
+    if (existing) return true;
+    const ok = await ensureFolderPermission();
+    if (!ok) return false;
+    await writeFileByPath(path, blob);
+    return true;
+  }
+
+  try {
+    const existing = await getOne('originals', song.id);
+    if (existing && existing.blob) return true;
+    if (db) await putOne('originals', { id: song.id, blob });
+    else mem.originals.set(song.id, { id: song.id, blob });
+    return true;
+  } catch (err) {
+    console.warn('Não foi possível guardar o PDF original.', err);
+    return false;
+  }
+}
+
+async function removeOriginalPath(path) {
+  if (!path || !dirHandle) return;
+  try {
+    await removeFileByPath(path);
+  } catch (err) {
+    if (!err || err.name !== 'NotFoundError') {
+      console.warn('Não foi possível remover a cópia original.', err);
+    }
+  }
+}
+
+/* Remove a cópia limpa quando o PDF foi trocado por outro arquivo. */
+async function clearOriginalBackup(song, previousFolderPath) {
+  if (!song) return;
+  if (song.folderPath) await removeOriginalPath(originalPathForSong(song));
+  if (previousFolderPath && previousFolderPath !== song.folderPath) {
+    await removeOriginalPath(ORIGINALS_DIR + '/' + previousFolderPath);
+  }
+  try {
+    if (db) await tx('originals', 'readwrite', (stores) => req(stores[0].delete(song.id)));
+    else mem.originals.delete(song.id);
+  } catch (err) {
+    console.warn('Não foi possível remover o original interno.', err);
+  }
+}
+
+/* Mantém a cópia limpa quando o arquivo só mudou de pasta/nome. */
+async function moveOriginalBackup(previousFolderPath, nextFolderPath) {
+  if (!dirHandle || !previousFolderPath || !nextFolderPath || previousFolderPath === nextFolderPath) return;
+  const oldPath = ORIGINALS_DIR + '/' + previousFolderPath;
+  const newPath = ORIGINALS_DIR + '/' + nextFolderPath;
+  try {
+    if (await getFileByPath(newPath)) return;
+    const file = await getFileByPath(oldPath);
+    if (!file) return;
+    await writeFileByPath(newPath, file);
+    await removeOriginalPath(oldPath);
+  } catch (err) {
+    console.warn('Não foi possível mover a cópia original.', err);
+  }
+}
+
+/* Procura pelo nome/tamanho quando o caminho guardado no backup está velho. */
+async function findFolderFileByMeta(song) {
+  if (!dirHandle || !song) return null;
+  const wantedName = song.file || String(song.folderPath || '').split('/').pop();
+  if (!wantedName) return null;
+  const wanted = comparableName(wantedName);
+  let items;
+  try {
+    items = await collectFolderFiles(dirHandle, '', 0, []);
+  } catch (err) {
+    return null;
+  }
+  const matches = [];
+  for (const item of items) {
+    if (comparableName(item.name) !== wanted) continue;
+    let file;
+    try {
+      file = await item.handle.getFile();
+    } catch (err) {
+      continue;
+    }
+    if (song.size && file.size && Number(song.size) !== file.size) continue;
+    matches.push({ path: item.path, file });
+  }
+  return matches.length === 1 ? matches[0] : null;
+}
+
 /* Lê o arquivo da pasta mapeada; se não houver, usa o armazenamento interno. */
 async function loadFile(song) {
   if (!song) return null;
+  const hadFolder = Boolean(dirHandle);
+  if (song.folderPath && !dirHandle) {
+    // Depois de reiniciar/reinstalar, o navegador pode deixar a pasta apenas
+    // com permissão "prompt". A abertura da cifra é um gesto do usuário,
+    // então aproveitamos para pedir o acesso antes de dizer que sumiu.
+    await restoreDirHandle();
+    if (!dirHandle && pendingDirHandle) await ensureFolderPermission();
+  }
+  if (!hadFolder && dirHandle && song.folderPath) {
+    // A pasta acabou de ser reconectada: relê os caminhos em segundo plano
+    // para tirar o aviso de "ausente" das outras cifras também.
+    setTimeout(() => {
+      if (dirHandle && !folderScanning) scanLibraryFolder({ silent: true });
+    }, 1500);
+  }
   if (song.folderPath && dirHandle) {
     const file = await getFileByPath(song.folderPath);
     if (file) return file;
+    const found = await findFolderFileByMeta(song);
+    if (found) {
+      song.folderPath = found.path;
+      song.missing = false;
+      await saveMeta(song);
+      return found.file;
+    }
   }
   if (song.storage === 'folder' && dirHandle && song.file) {
     // Compatibilidade com arquivos gravados na raiz da pasta por versões antigas.
@@ -707,18 +858,20 @@ async function deleteSongRecord(id) {
     mem.songs.delete(id);
     mem.files.delete(id);
     mem.texts.delete(id);
+    mem.originals.delete(id);
     for (const list of updatedLists) mem.lists.set(list.id, list);
     scheduleBackup();
     return updatedLists;
   }
 
-  await tx(['songs', 'files', 'texts', 'lists'], 'readwrite', (stores) => {
+  await tx(['songs', 'files', 'texts', 'originals', 'lists'], 'readwrite', (stores) => {
     const ops = [
       req(stores[0].delete(id)),
       req(stores[1].delete(id)),
-      req(stores[2].delete(id))
+      req(stores[2].delete(id)),
+      req(stores[3].delete(id))
     ];
-    for (const list of updatedLists) ops.push(req(stores[3].put(list)));
+    for (const list of updatedLists) ops.push(req(stores[4].put(list)));
     return Promise.all(ops);
   });
 
@@ -789,8 +942,8 @@ async function scanLibraryFolder(options = {}) {
   }
 
   folderScanning = true;
-  const seen = new Set();
-  const hidden = new Set(hiddenPaths());
+  const seenKeys = new Set();
+  const hidden = new Set(hiddenPaths().map(comparablePath));
   let added = 0;
   let updated = 0;
   let found = 0;
@@ -801,14 +954,16 @@ async function scanLibraryFolder(options = {}) {
     setProgress(0.05, 'Lendo a pasta ' + dirHandle.name + '…');
     const items = await collectFolderFiles(dirHandle, '', 0, []);
     if (items.length >= MAX_FOLDER_FILES) limitReached = true;
+    const scannedPaths = new Set(items.map((item) => comparablePath(item.path)));
 
     for (const item of items) {
       found++;
       if (found > MAX_FOLDER_FILES) break;
       const relativePath = item.path;
-      seen.add(relativePath);
+      const relativeKey = comparablePath(relativePath);
+      seenKeys.add(relativeKey);
 
-      if (hidden.has(relativePath)) {
+      if (hidden.has(relativeKey)) {
         hiddenCount++;
         continue;
       }
@@ -822,13 +977,27 @@ async function scanLibraryFolder(options = {}) {
       const type = fileType(file.name);
       if (!type) continue;
 
-      let song = songs.find((candidate) => candidate.folderPath === relativePath);
+      let song = songs.find((candidate) => candidate.folderPath &&
+        comparablePath(candidate.folderPath) === relativeKey);
       const isNew = !song;
       if (!song) {
         // Aproveita uma importação antiga do mesmo arquivo, sem duplicar.
         song = songs.find((candidate) => !candidate.folderPath && candidate.source !== 'folder' &&
-          String(candidate.file || '').toLowerCase() === file.name.toLowerCase() &&
+          comparableName(candidate.file) === comparableName(file.name) &&
           (!candidate.size || !file.size || Number(candidate.size) === file.size));
+      }
+      if (!song) {
+        // Depois de reinstalar o app ou mover a pasta, o caminho do backup pode
+        // não bater com o caminho atual. Se o nome e o tamanho forem únicos,
+        // reaproveita a mesma cifra (mantendo ID, repertórios, etiquetas etc.).
+        const candidates = songs.filter((candidate) => {
+          if (!candidate.folderPath) return false;
+          if (scannedPaths.has(comparablePath(candidate.folderPath))) return false;
+          if (comparableName(candidate.file) !== comparableName(file.name)) return false;
+          if (candidate.size && file.size && Number(candidate.size) !== file.size) return false;
+          return true;
+        });
+        if (candidates.length === 1) song = candidates[0];
       }
 
       if (!song) {
@@ -850,10 +1019,12 @@ async function scanLibraryFolder(options = {}) {
         songs.push(song);
       }
 
+      const previousFolderPath = song.folderPath;
+      const sizeChanged = !isNew && Number(song.size) !== file.size;
       const changed = isNew ||
         song.file !== file.name ||
         song.type !== type ||
-        Number(song.size) !== file.size ||
+        sizeChanged ||
         song.folderPath !== relativePath ||
         song.missing ||
         song.source !== 'folder';
@@ -865,6 +1036,16 @@ async function scanLibraryFolder(options = {}) {
       song.source = 'folder';
       song.storage = 'folder';
       song.missing = false;
+
+      if (sizeChanged) {
+        // O arquivo foi trocado/alterado fora do app: a cópia limpa antiga
+        // deixou de corresponder ao PDF atual.
+        song.annotationsFlattened = false;
+        await clearOriginalBackup(song, previousFolderPath);
+      } else if (previousFolderPath && previousFolderPath !== relativePath) {
+        // O arquivo só mudou de lugar: leva a cópia limpa junto.
+        await moveOriginalBackup(previousFolderPath, relativePath);
+      }
 
       if (isNew) {
         added++;
@@ -887,11 +1068,12 @@ async function scanLibraryFolder(options = {}) {
     let missing = 0;
     for (const song of songs) {
       if (song.source !== 'folder' || !song.folderPath) continue;
-      if (!seen.has(song.folderPath) && !song.missing) {
+      const key = comparablePath(song.folderPath);
+      if (!seenKeys.has(key) && !song.missing) {
         song.missing = true;
         await saveMeta(song);
         missing++;
-      } else if (seen.has(song.folderPath) && song.missing) {
+      } else if (seenKeys.has(key) && song.missing) {
         song.missing = false;
         await saveMeta(song);
       }
@@ -993,6 +1175,7 @@ async function indexFolderTexts() {
 
 /* ---------- tela da pasta ---------- */
 const BACKUP_FILENAME = 'cifras-backup.json';
+const ORIGINALS_DIR = '.cifras-originais';
 
 async function blobToBase64(blob) {
   return new Promise((resolve, reject) => {
@@ -1094,11 +1277,12 @@ async function exportDbToFolder(options = {}) {
 
   try {
     if (!silent) setProgress(0.05, 'Montando backup do banco...');
-    const [songMetas, listRecords, textRecords, fileRecords] = await Promise.all([
+    const [songMetas, listRecords, textRecords, fileRecords, originalRecords] = await Promise.all([
       getAll('songs'),
       getAll('lists'),
       getAll('texts'),
-      getAll('files')
+      getAll('files'),
+      getAll('originals')
     ]);
 
     const files = [];
@@ -1116,6 +1300,18 @@ async function exportDbToFolder(options = {}) {
       }
     }
 
+    const originals = [];
+    for (let i = 0; i < originalRecords.length; i++) {
+      const rec = originalRecords[i];
+      if (!rec || !rec.blob) continue;
+      try {
+        const base64 = await blobToBase64(rec.blob);
+        originals.push({ id: rec.id, type: rec.blob.type || 'application/pdf', data: base64 });
+      } catch (err) {
+        console.warn('Não foi possível incluir o original no backup', rec.id, err);
+      }
+    }
+
     if (!silent) setProgress(0.6, 'Gravando na pasta...');
     const backup = {
       app: 'sistema-cifras',
@@ -1125,7 +1321,8 @@ async function exportDbToFolder(options = {}) {
       lists: listRecords,
       texts: textRecords,
       hidden: hiddenPaths(),
-      files
+      files,
+      originals
     };
 
     const json = JSON.stringify(backup);
@@ -1188,17 +1385,19 @@ async function importDbFromFolder(options = {}) {
       mem.lists.clear();
       mem.texts.clear();
       mem.files.clear();
+      mem.originals.clear();
       (backup.songs || []).forEach((s) => mem.songs.set(s.id, s));
       (backup.lists || []).forEach((l) => mem.lists.set(l.id, l));
       (backup.texts || []).forEach((t) => mem.texts.set(t.id, t));
     } else {
-      await tx(['songs', 'lists', 'texts', 'files'], 'readwrite', (stores) => {
+      await tx(['songs', 'lists', 'texts', 'files', 'originals'], 'readwrite', (stores) => {
         const jobs = [];
-        const [songsStore, listsStore, textsStore, filesStore] = stores;
+        const [songsStore, listsStore, textsStore, filesStore, originalsStore] = stores;
         jobs.push(req(songsStore.clear()));
         jobs.push(req(listsStore.clear()));
         jobs.push(req(textsStore.clear()));
         jobs.push(req(filesStore.clear()));
+        jobs.push(req(originalsStore.clear()));
         for (const s of backup.songs || []) jobs.push(req(songsStore.put(s)));
         for (const l of backup.lists || []) jobs.push(req(listsStore.put(l)));
         for (const t of backup.texts || []) jobs.push(req(textsStore.put(t)));
@@ -1212,7 +1411,7 @@ async function importDbFromFolder(options = {}) {
     for (let i = 0; i < files.length; i++) {
       const f = files[i];
       if (!f || !f.id || !f.data) continue;
-      setProgress(0.5 + (i / Math.max(1, files.length)) * 0.4, 'Restaurando arquivo ' + (i + 1) + '/' + files.length);
+      setProgress(0.5 + (i / Math.max(1, files.length)) * 0.3, 'Restaurando arquivo ' + (i + 1) + '/' + files.length);
       try {
         const blob = base64ToBlob(f.data, f.type || 'application/octet-stream');
         if (db) {
@@ -1222,6 +1421,23 @@ async function importDbFromFolder(options = {}) {
         }
       } catch (err) {
         console.warn('Falha ao restaurar arquivo', f.id, err);
+      }
+    }
+
+    const originals = Array.isArray(backup.originals) ? backup.originals : [];
+    for (let i = 0; i < originals.length; i++) {
+      const o = originals[i];
+      if (!o || !o.id || !o.data) continue;
+      setProgress(0.8 + (i / Math.max(1, originals.length)) * 0.1, 'Restaurando original ' + (i + 1) + '/' + originals.length);
+      try {
+        const blob = base64ToBlob(o.data, o.type || 'application/pdf');
+        if (db) {
+          await putOne('originals', { id: o.id, blob });
+        } else {
+          mem.originals.set(o.id, { id: o.id, blob });
+        }
+      } catch (err) {
+        console.warn('Falha ao restaurar original', o.id, err);
       }
     }
 
@@ -1457,7 +1673,8 @@ async function importFiles(fileList, options = {}) {
           storage: existing.storage,
           source: existing.source,
           folderPath: existing.folderPath,
-          missing: existing.missing
+          missing: existing.missing,
+          annotationsFlattened: existing.annotationsFlattened
         } : null;
 
         let song;
@@ -1516,6 +1733,14 @@ async function importFiles(fileList, options = {}) {
           await storeFile(song, blob, text);
         }
         buildHay(song);
+
+        if (existing) {
+          // O arquivo importado substituiu o anterior; qualquer anotação
+          // antiga e a cópia original guardada não valem mais para ele.
+          existing.annotationsFlattened = false;
+          await saveMeta(existing);
+          await clearOriginalBackup(existing, before && before.folderPath);
+        }
 
         if (existing) {
           updated++;
@@ -2367,6 +2592,16 @@ async function deleteFolderFile(song) {
     } catch (err) {
       if (!err || err.name !== 'NotFoundError') throw err;
     }
+    const originalPath = originalPathForSong(song);
+    if (originalPath) {
+      try {
+        await removeFileByPath(originalPath);
+      } catch (err) {
+        if (!err || err.name !== 'NotFoundError') {
+          console.warn('Não foi possível apagar a cópia original.', err);
+        }
+      }
+    }
     setHiddenPaths(hiddenPaths().filter((path) => path !== song.folderPath));
     const updatedLists = await deleteSongRecord(song.id);
     songs = songs.filter((item) => item.id !== song.id);
@@ -2478,10 +2713,9 @@ async function showSong() {
   updateAnnotateButton(song);
 
   if (song.missing) {
-    body.innerHTML = '<div class="viewer-msg">O arquivo não está mais na pasta.<br>' +
-      'Se ele foi movido ou renomeado, toque em “📁 Pasta das cifras” e depois em “Atualizar lista”.</div>';
-    updateAnnotateButton(song);
-    return;
+    // Mesmo marcada como ausente, tenta abrir: a pasta pode ter sido
+    // reconectada ou o arquivo pode ter sido movido para outro caminho.
+    body.innerHTML = '<div class="viewer-msg">Procurando o arquivo na pasta…</div>';
   }
 
   let blob;
@@ -2494,14 +2728,26 @@ async function showSong() {
   if (token !== renderGeneration) return;
 
   if (!blob) {
-    body.innerHTML = song.folderPath
-      ? '<div class="viewer-msg">O arquivo não foi encontrado na pasta.<br>' +
-        'Toque em “📁 Pasta das cifras” e depois em “Atualizar lista”.</div>'
-      : '<div class="viewer-msg">O arquivo não foi encontrado neste aparelho.<br>Importe novamente.</div>';
+    const needsReconnect = !dirHandle;
+    if (song.folderPath && needsReconnect) {
+      body.innerHTML = '<div class="viewer-msg">A pasta das cifras não está conectada.<br>' +
+        'Toque em “📁 Pasta das cifras” e depois em “Reconectar” para liberar o acesso.</div>';
+    } else if (song.folderPath) {
+      body.innerHTML = '<div class="viewer-msg">O arquivo não foi encontrado na pasta.<br>' +
+        'Toque em “📁 Pasta das cifras” e depois em “Atualizar lista”.</div>';
+    } else {
+      body.innerHTML = '<div class="viewer-msg">O arquivo não foi encontrado neste aparelho.<br>Importe novamente.</div>';
+    }
     updateAnnotateButton(song);
     return;
   }
 
+  if (song.missing) {
+    song.missing = false;
+    await saveMeta(song);
+    render();
+    updateAnnotateButton(song);
+  }
   currentBlob = blob;
   currentBlobSongId = song.id;
 
@@ -2794,10 +3040,13 @@ function changeZoom(delta) {
 
 function updateAnnotateButton(song) {
   const btn = $('#annotateBtn');
-  if (!btn) return;
+  const restore = $('#restorePdfBtn');
   const can = Boolean(song && song.type === 'pdf' && !song.missing);
-  btn.hidden = !can;
-  btn.classList.toggle('on', Boolean(can && annotating));
+  if (btn) {
+    btn.hidden = !can;
+    btn.classList.toggle('on', Boolean(can && annotating));
+  }
+  if (restore) restore.hidden = !can;
 }
 
 function stopAnnotating() {
@@ -2885,30 +3134,50 @@ function getAnnotationLayerCtx(layer) {
   return layer.getContext('2d');
 }
 
+function pointPressureValue(point) {
+  const value = Number(point && point.p);
+  return Number.isFinite(value) && value > 0 ? Math.min(1, value) : 0.5;
+}
+
+function drawAnnotationSegment(ctx, canvas, stroke, fromIndex, toIndex) {
+  if (!ctx || !canvas || !stroke || !stroke.points || stroke.points.length < 2) return;
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
+  ctx.strokeStyle = stroke.color;
+  ctx.fillStyle = stroke.color;
+  const baseWidth = Math.max(1, (stroke.width || 0.002) * canvas.width);
+  const start = Math.max(1, fromIndex);
+  const end = Math.min(toIndex, stroke.points.length - 1);
+  for (let index = start; index <= end; index++) {
+    const from = stroke.points[index - 1];
+    const to = stroke.points[index];
+    const pressure = (pointPressureValue(from) + pointPressureValue(to)) / 2;
+    ctx.lineWidth = Math.max(0.9, baseWidth * (0.55 + pressure * 0.9));
+    ctx.beginPath();
+    ctx.moveTo(from.x * canvas.width, from.y * canvas.height);
+    ctx.lineTo(to.x * canvas.width, to.y * canvas.height);
+    ctx.stroke();
+  }
+}
+
 function drawAnnotationStrokes(ctx, canvas, strokes) {
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.lineCap = 'round';
+  ctx.lineJoin = 'round';
   for (const stroke of strokes || []) {
     if (!stroke || !stroke.points || !stroke.points.length) continue;
-    ctx.strokeStyle = stroke.color;
-    ctx.fillStyle = stroke.color;
-    ctx.lineWidth = Math.max(1, stroke.width * canvas.width);
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
     if (stroke.points.length === 1) {
-      const p = stroke.points[0];
+      const point = stroke.points[0];
+      const baseWidth = Math.max(1, (stroke.width || 0.002) * canvas.width);
+      const radius = Math.max(0.8, (baseWidth * (0.55 + pointPressureValue(point) * 0.9)) / 2);
+      ctx.strokeStyle = stroke.color;
+      ctx.fillStyle = stroke.color;
       ctx.beginPath();
-      ctx.arc(p.x * canvas.width, p.y * canvas.height, Math.max(0.8, ctx.lineWidth / 2), 0, Math.PI * 2);
+      ctx.arc(point.x * canvas.width, point.y * canvas.height, radius, 0, Math.PI * 2);
       ctx.fill();
       continue;
     }
-    ctx.beginPath();
-    stroke.points.forEach((point, index) => {
-      const x = point.x * canvas.width;
-      const y = point.y * canvas.height;
-      if (index === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
+    drawAnnotationSegment(ctx, canvas, stroke, 1, stroke.points.length - 1);
   }
 }
 
@@ -3073,7 +3342,11 @@ function onAnnotationPointerDown(event) {
 
   const x = (event.clientX - rect.left) / Math.max(1, rect.width);
   const y = (event.clientY - rect.top) / Math.max(1, rect.height);
-  const stroke = { color: annotationColor, width: Math.max(0.001, annotationWidth / Math.max(1, rect.width)), points: [{ x, y }] };
+  const stroke = {
+    color: annotationColor,
+    width: Math.max(0.001, annotationWidth / Math.max(1, rect.width)),
+    points: [{ x, y, p: pointPressureValue(event) }]
+  };
   if (!annotations.has(pageNumber)) annotations.set(pageNumber, []);
   annotations.get(pageNumber).push(stroke);
   annotationHistory.push({ type: 'draw', pageNumber, stroke });
@@ -3099,15 +3372,38 @@ function onAnnotationPointerMove(event) {
   }
   const layer = activeAnnotation.layer;
   const rect = layer.getBoundingClientRect();
-  const x = (event.clientX - rect.left) / Math.max(1, rect.width);
-  const y = (event.clientY - rect.top) / Math.max(1, rect.height);
-  activeAnnotation.stroke.points.push({ x, y });
-  drawAnnotationLayer(layer);
+  const samples = typeof event.getCoalescedEvents === 'function'
+    ? (event.getCoalescedEvents() || [])
+    : [];
+  const points = samples.length ? samples : [event];
+  const stroke = activeAnnotation.stroke;
+  const startIndex = stroke.points.length;
+  for (const sample of points) {
+    if (sample.pointerId !== undefined && sample.pointerId !== activeAnnotation.pointerId) continue;
+    if (!Number.isFinite(sample.clientX) || !Number.isFinite(sample.clientY)) continue;
+    const x = (sample.clientX - rect.left) / Math.max(1, rect.width);
+    const y = (sample.clientY - rect.top) / Math.max(1, rect.height);
+    const last = stroke.points[stroke.points.length - 1];
+    if (last) {
+      const dx = (x - last.x) * rect.width;
+      const dy = (y - last.y) * rect.height;
+      if (dx * dx + dy * dy < 0.36) continue;
+    }
+    stroke.points.push({ x, y, p: pointPressureValue(sample) });
+  }
+  if (stroke.points.length > startIndex) {
+    // Desenha só o trecho novo: evita redesenhar todos os traços a cada
+    // evento do S Pen e deixa a escrita bem mais responsiva.
+    const ctx = getAnnotationLayerCtx(layer);
+    drawAnnotationSegment(ctx, layer, stroke, startIndex - 1, stroke.points.length - 1);
+  }
 }
 
 function onAnnotationPointerUp(event) {
   if (!activeAnnotation || event.pointerId !== activeAnnotation.pointerId) return;
-  try { activeAnnotation.layer.releasePointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+  const layer = activeAnnotation.layer;
+  try { layer.releasePointerCapture(event.pointerId); } catch (e) { /* ignore */ }
+  if (layer && activeAnnotation.tool !== 'erase') drawAnnotationLayer(layer);
   activeAnnotation = null;
 }
 
@@ -3173,6 +3469,15 @@ async function saveAnnotations() {
       currentBlob = await loadFile(song);
       if (!currentBlob) throw new Error('Arquivo não encontrado');
     }
+    // Guarda uma cópia limpa antes da primeira anotação feita por esta versão.
+    // Assim o usuário pode restaurar o PDF e remover todas as anotações salvas.
+    if (!song.annotationsFlattened) {
+      try {
+        await ensureOriginalBackup(song, currentBlob);
+      } catch (err) {
+        console.warn('Não foi possível guardar a cópia original do PDF.', err);
+      }
+    }
     const source = await currentBlob.arrayBuffer();
     const pdfDoc = await window.PDFLib.PDFDocument.load(source);
     const pages = pdfDoc.getPages();
@@ -3189,6 +3494,7 @@ async function saveAnnotations() {
     setProgress(0.65, 'Gravando no arquivo original...');
     const out = await pdfDoc.save();
     const blob = new Blob([out], { type: 'application/pdf' });
+    song.annotationsFlattened = true;
     await persistUpdatedBlob(song, blob);
     currentBlob = blob;
     currentBlobSongId = song.id;
@@ -3205,6 +3511,42 @@ async function saveAnnotations() {
     toast('Não foi possível salvar as anotações.', 'error');
   } finally {
     annotationBusy = false;
+  }
+}
+
+async function restoreCurrentOriginal() {
+  const song = currentSong();
+  if (!song || song.type !== 'pdf') return;
+  if (annotationBusy) return;
+
+  let blob = null;
+  try {
+    blob = await originalBlobForSong(song);
+  } catch (err) {
+    console.warn('Não foi possível ler a cópia original.', err);
+  }
+  if (!blob) {
+    toast('Nenhuma cópia original guardada. Anotações salvas antes desta versão não podem ser removidas.', 'error');
+    return;
+  }
+  if (!confirm('Restaurar o PDF original e apagar as anotações salvas?\n\n' +
+    'O arquivo atual será substituído pela cópia guardada antes da primeira anotação feita pelo app. ' +
+    'Alterações feitas depois em outros aplicativos serão perdidas.')) return;
+
+  try {
+    if (annotating) stopAnnotating();
+    annotations = new Map();
+    annotationHistory = [];
+    activeAnnotation = null;
+    song.annotationsFlattened = false;
+    await persistUpdatedBlob(song, blob);
+    currentBlob = blob;
+    currentBlobSongId = song.id;
+    await showSong();
+    toast('PDF original restaurado. Anotações removidas.');
+  } catch (err) {
+    console.error('Falha ao restaurar o PDF original', err);
+    toast('Não foi possível restaurar o PDF original.', 'error');
   }
 }
 
@@ -3242,6 +3584,56 @@ async function fileRecordForCurrent() {
   }
 }
 
+async function copyCurrentPath() {
+  const song = currentSong();
+  if (!song) return;
+  const folderName = dirHandle ? dirHandle.name : (pendingDirHandle ? pendingDirHandle.name : '');
+  const text = song.folderPath
+    ? [folderName, song.folderPath].filter(Boolean).join('/')
+    : song.file || '';
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Caminho copiado: ' + text);
+  } catch (err) {
+    window.prompt('Copie o caminho do arquivo:', text);
+  }
+}
+
+function openLocateModal() {
+  const song = currentSong();
+  if (!song) return;
+  const folderName = dirHandle ? dirHandle.name : (pendingDirHandle ? pendingDirHandle.name : '');
+  const relative = song.folderPath || '';
+  const isFolder = Boolean(relative);
+
+  $('#modalBody').innerHTML = `
+    <h2 id="modalTitle">Localizar arquivo</h2>
+    ${isFolder
+      ? `<p class="export-info">Pasta conectada: <strong>${esc(folderName || '(pasta do tablet)')}</strong></p>
+         <p class="export-info">Caminho dentro da pasta: <strong>${esc(relative)}</strong></p>
+         <p class="export-info">
+           O navegador não consegue abrir o gerenciador de arquivos nem o Samsung Notes
+           diretamente nesse caminho. Para editar fora do app:
+         </p>
+         <ol class="export-info">
+           <li>Abra o <strong>Meus Arquivos</strong> do tablet.</li>
+           <li>Entre na pasta <strong>${esc(folderName || 'escolhida')}</strong>${relative.includes('/') ? ' e nas subpastas indicadas' : ''}.</li>
+           <li>Toque em <strong>${esc(song.file)}</strong> → <strong>Abrir com</strong> → <strong>Samsung Notes</strong>.</li>
+         </ol>
+         <p class="export-info">Se preferir, use <strong>Copiar caminho</strong> para colar no gerenciador de arquivos.</p>`
+      : `<p class="export-info">
+           Este arquivo está no armazenamento interno do app. Para editar em outro aplicativo,
+           baixe uma cópia e abra pelo Samsung Notes ou pelo gerenciador de arquivos.
+         </p>`}
+    <div class="modal-actions">
+      ${isFolder ? '<button class="primary grow" data-act="copy-path">Copiar caminho</button>' : ''}
+      <button data-act="download-current">Baixar</button>
+      <button data-act="cancel-export">Fechar</button>
+    </div>
+  `;
+  showModal();
+}
+
 async function downloadCurrent() {
   const found = await fileRecordForCurrent();
   if (!found) return;
@@ -3274,6 +3666,7 @@ async function shareCurrent() {
   if (canShare) {
     try {
       await navigator.share({ files: [file], title: song.name, text: song.name });
+      toast('Se o Samsung Notes não aparecer, use 📂 Localizar para abrir o arquivo pela pasta.');
       return;
     } catch (err) {
       if (err && err.name === 'AbortError') return;
@@ -3282,7 +3675,7 @@ async function shareCurrent() {
   }
 
   downloadBlob(blob, song.file);
-  toast('Compartilhamento indisponível: o arquivo foi baixado.');
+  toast('Compartilhamento indisponível: o arquivo foi baixado. Use 📂 Localizar para abrir pela pasta.');
 }
 
 /* ============================================================
@@ -3516,6 +3909,11 @@ function bindEvents() {
           closeModal();
           toast('Arquivo baixado: ' + formatBytes(blob.size) + '.');
         }
+      } else if (action === 'copy-path') {
+        await copyCurrentPath();
+      } else if (action === 'download-current') {
+        await downloadCurrent();
+        closeModal();
       } else if (action === 'cancel-export') {
         closeModal();
       } else if (action === 'folder-pick') {
@@ -3580,6 +3978,10 @@ function bindEvents() {
   });
   $('#downloadBtn').addEventListener('click', downloadCurrent);
   $('#shareBtn').addEventListener('click', shareCurrent);
+  const locateBtn = $('#locateBtn');
+  if (locateBtn) locateBtn.addEventListener('click', openLocateModal);
+  const restorePdfBtn = $('#restorePdfBtn');
+  if (restorePdfBtn) restorePdfBtn.addEventListener('click', restoreCurrentOriginal);
 
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape') {

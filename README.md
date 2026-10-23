@@ -7,9 +7,11 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 ## O que já funciona
 
 - **Pasta das cifras**: escolha uma pasta do tablet (ou do computador) e o app lista automaticamente os PDF, DOC, DOCX e imagens (PNG/JPG) que estiverem nela, inclusive em subpastas. As cifras são lidas **direto da pasta**. Ao importar um arquivo novo com a pasta conectada, ele é gravado nessa pasta (e aparece nela); nada é movido ou apagado sem ação sua. Ao colocar ou remover arquivos, use **Atualizar lista**.
+- **Reconexão e caminhos**: depois de reiniciar ou reinstalar, se o navegador deixar a pasta pendente de permissão, abrir uma cifra pede o acesso em vez de dizer que o arquivo sumiu. Arquivos que mudaram de pasta/nome são relocalizados pelo nome e tamanho, mantendo ID, repertórios, etiquetas e favoritos.
 - **Banco na pasta**: o app grava automaticamente `cifras-backup.json` na pasta escolhida (metadados, repertórios, textos, ocultos e arquivos importados). Serve para sincronizar a pasta com o OneDrive e restaurar em outro aparelho. Numa instalação nova, ao escolher uma pasta que já tenha esse arquivo, o app restaura o banco automaticamente antes de gravar.
 - Importar PDF, DOCX, DOC, PNG e JPG avulsos (arrastando ou pelo botão). Com uma pasta conectada, o arquivo original é salvo nela; sem pasta, fica no armazenamento interno do app.
-- **Anotar no PDF**: abra a cifra e toque em **✏ Anotar** para escrever com o dedo ou a caneta, escolher cor/espessura, desfazer, usar a **borracha** (botão do S Pen ou botão ⌫ Borracha) e **Salvar no PDF**. As anotações são gravadas no próprio arquivo original (na pasta ou no armazenamento interno).
+- **Anotar no PDF**: abra a cifra e toque em **✏ Anotar** para escrever com o dedo ou a caneta, com pressão e traço mais suave, escolher cor/espessura, desfazer, usar a **borracha** (botão do S Pen ou botão ⌫ Borracha) e **Salvar no PDF**. As anotações são gravadas no próprio arquivo original (na pasta ou no armazenamento interno). Antes da primeira anotação, o app guarda uma cópia limpa do PDF; o botão **↺ Remover anotações** restaura essa cópia.
+- **Localizar arquivo**: o botão **📂 Localizar** mostra o caminho do arquivo dentro da pasta e permite copiá-lo, para abrir no Meus Arquivos → **Abrir com** → Samsung Notes. O navegador não consegue iniciar o Samsung Notes diretamente no arquivo da pasta.
 - **Excluir sem perder o original**: para cifras da pasta, o app separa **Ocultar da biblioteca** (mantém o arquivo) de **Apagar da pasta** (remove definitivamente, com confirmação).
 - Busca instantânea por nome, artista, tom, etiqueta e texto da letra (todas as páginas dos PDFs; a busca pelo texto é preparada aos poucos, ao abrir cada cifra, ou pelo botão **Preparar busca pelo texto**).
 - Etiquetas, favoritas e edição de nome/artista/tom.
@@ -18,7 +20,7 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 - Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF, para baixar ou compartilhar.
 - Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música e atalhos de teclado.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.
-- No visualizador, **↗ Abrir em outro app** envia o arquivo para o Samsung Notes ou outro app compatível sem precisar baixar uma cópia permanente; **⤓ Baixar** guarda uma cópia em Downloads.
+- No visualizador, **↗ Abrir em outro app** tenta compartilhar o arquivo; se o Samsung Notes não aparecer no menu, use **📂 Localizar** para abrir pela pasta no Meus Arquivos. **⤓ Baixar** guarda uma cópia em Downloads.
 - Tema claro/escuro salvo.
 - Funciona **offline** depois da primeira visita, inclusive abrindo PDFs e imagens.
 - Instalável como PWA quando servido por HTTPS.
@@ -76,18 +78,20 @@ interno do app.
 
 ## Dados
 
-Tudo fica no IndexedDB do navegador, na base `cifras` (versão 3):
+Tudo fica no IndexedDB do navegador, na base `cifras` (versão 4):
 
 - `songs` — metadados (nome, artista, tom, etiquetas, favorita, origem, caminho na pasta, hash, datas).
 - `files` — arquivos importados como cópia em `Blob` (as cifras mapeadas da pasta **não** são copiadas).
+- `originals` — cópia limpa de PDFs internos antes da primeira anotação, para o botão **↺ Remover anotações**.
 - `texts` — texto extraído para a busca.
 - `lists` — repertórios e ordem das músicas.
 - `handles` — a referência à pasta escolhida (File System Access API).
 
 Além do IndexedDB, a pasta escolhida guarda `cifras-backup.json` com os mesmos dados
-(metadados, repertórios, textos, ocultos e arquivos importados). Ele é regravado
-automaticamente depois de alterações e pode ser restaurado em outro aparelho pela tela
-da pasta. As cifras mapeadas não entram nesse arquivo: elas já estão na própria pasta.
+(metadados, repertórios, textos, ocultos, arquivos importados e cópias originais de PDFs internos).
+Ele é regravado automaticamente depois de alterações e pode ser restaurado em outro aparelho pela tela
+da pasta. As cifras mapeadas não entram nesse arquivo: elas já estão na própria pasta. Para PDFs da pasta,
+a cópia limpa para remover anotações fica em uma subpasta oculta `.cifras-originais`.
 
 A versão 1 do banco (protótipo antigo, com blob e texto dentro de `songs`) é migrada automaticamente na primeira abertura.
 
@@ -96,14 +100,14 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 ## Limitações conhecidas
 
 - A pasta só pode ser mapeada em navegadores com a **File System Access API** (Chrome/Edge no Android, tablet e computador). Sem essa API, use **Importar arquivos / pasta** (cópia).
-- O navegador pode pedir para liberar o acesso à pasta de novo depois de fechar; toque em 📁 → **Reconectar**.
+- O navegador pode pedir para liberar o acesso à pasta de novo depois de fechar; toque em 📁 → **Reconectar**. Ao abrir uma cifra com o acesso pendente, o app também pede a liberação e relê os caminhos em segundo plano.
 - Cada arquivo importado tem limite de 100 MB. O zip e o PDF único do repertório são montados na memória do aparelho; repertórios muito grandes podem demorar ou falhar em tablets com pouca memória.
 - O PDF único inclui apenas as cifras em PDF. DOC/DOCX e imagens ficam de fora e o app avisa quais são; use o zip para levá-las.
 - Ao abrir o app por `http://IP:8000`, o service worker e a instalação como PWA não funcionam. Além disso, o IndexedDB é separado por endereço e porta: se o IP do computador mudar, o tablet enxerga outro site e a biblioteca parece vazia. Para uso real, use um endereço HTTPS fixo.
 - `.doc` antigo é listado e pode ser baixado, mas não abre no navegador. Converta para `.docx` ou PDF.
 - PDFs escritos à mão (Samsung Notes) e imagens não têm texto; a busca encontra só pelo nome.
-- A anotação grava no **próprio PDF original**, como pedido. Se quiser guardar uma versão sem anotações, mantenha uma cópia do arquivo antes de salvar. Depois de salva, a anotação vira parte do PDF e não pode ser apagada separadamente pela borracha em outra sessão.
-- O navegador não consegue iniciar o Samsung Notes apontando direto para um arquivo da pasta. Use **↗ Abrir em outro app** (compartilhamento) ou **⤓ Baixar**; o Samsung Notes importa o PDF a partir daí.
+- A anotação grava no **próprio PDF original**, como pedido. Se quiser guardar uma versão sem anotações, mantenha uma cópia do arquivo antes de salvar. Depois de salva, a anotação vira parte do PDF e não pode ser apagada separadamente pela borracha em outra sessão. O botão **↺ Remover anotações** restaura a cópia limpa guardada antes da primeira anotação feita por esta versão; PDFs anotados por versões anteriores não têm essa cópia.
+- O navegador não consegue iniciar o Samsung Notes apontando direto para um arquivo da pasta. Use **📂 Localizar** para copiar o caminho e abrir pelo Meus Arquivos, **↗ Abrir em outro app** (compartilhamento) ou **⤓ Baixar**; o Samsung Notes importa o PDF a partir daí.
 - Não há transposição de tom.
 - O Safari pode limpar dados de sites pouco usados. Instalar na Tela de Início e manter o app em uso reduz o risco; mantenha as cifras originais na pasta mapeada.
 - O visualizador abre PDFs página a página; arquivos muito grandes ainda dependem da memória do aparelho.
@@ -115,8 +119,12 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 - Releitura da pasta: arquivos novos entram e os removidos ficam marcados como ausentes, sem apagar metadados.
 - Importação com pasta conectada: o arquivo de teste foi gravado na pasta e o metadado ficou como `storage: 'folder'`; sem pasta, cai no armazenamento interno.
 - Instalação nova com `cifras-backup.json` na pasta: o app restaurou o banco automaticamente antes de gravar e preservou a cifra e o repertório do backup.
+- Caminho antigo no backup (`Antiga/Cifra.pdf`) com o arquivo agora na raiz: o app relocalizou pelo nome/tamanho, manteve o mesmo ID e o repertório, sem marcar como ausente.
 - Exclusão de cifra da pasta: **Apagar da pasta** removeu o arquivo do mock e a linha da biblioteca; **Ocultar** mantém o arquivo.
 - Anotação em PDF: traço desenhado no visualizador e salvo no arquivo original; o PDF foi regravado e reabriu com a anotação.
+- Remover anotações: o app guardou o original interno, salvou o PDF anotado, restaurou o original e o PDF voltou ao tamanho inicial.
+- Cópia limpa de PDF da pasta: foi gravada em `.cifras-originais/...`, restaurou o PDF sem anotações e acompanhou o arquivo quando ele mudou para uma subpasta; o caminho e o original foram atualizados.
+- Localizar arquivo: o modal mostrou o caminho relativo da pasta e as instruções; para arquivo interno, orientou a baixar.
 - Borracha: o botão do S Pen (eventos `button=5`/`buttons=32` e botão lateral como `button=2`) e o botão **⌫ Borracha** apagaram o traço; desfazer restaurou e o PDF salvou normalmente.
 - Repertório recolhível: clique no cabeçalho expande e mostra todas as músicas; na edição, a linha inteira é arrastada para reordenar.
 - Importação de PDF de 3 páginas, PDF de 40 páginas e DOCX.
