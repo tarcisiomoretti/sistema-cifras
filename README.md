@@ -1,22 +1,21 @@
 # Sistema de Cifras
 
-Protótipo de biblioteca de cifras offline para igreja. Roda no navegador (tablet Android e iPhone), guarda PDFs/DOCX no aparelho e não precisa de servidor.
+Protótipo de biblioteca de cifras offline para igreja. Roda no navegador (tablet Android e iPhone), lê as cifras direto de uma pasta escolhida no aparelho e não precisa de servidor.
 
 Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que foi feito e plano do OneDrive.md`.
 
 ## O que já funciona
 
-- Importar PDF, DOCX e DOC (arrastando ou pelo botão).
-- Busca instantânea por nome, artista, tom, etiqueta e texto da letra (todas as páginas dos PDFs).
+- **Pasta das cifras**: escolha uma pasta do tablet (ou do computador) e o app lista automaticamente os PDF, DOC, DOCX e imagens (PNG/JPG) que estiverem nela, inclusive em subpastas. Os arquivos são lidos **direto da pasta**: nada é copiado, movido ou apagado. Ao colocar ou remover arquivos, use **Atualizar lista**.
+- Importar PDF, DOCX, DOC, PNG e JPG avulsos (arrastando ou pelo botão), como alternativa quando o navegador não permite mapear uma pasta.
+- Busca instantânea por nome, artista, tom, etiqueta e texto da letra (todas as páginas dos PDFs; a busca pelo texto é preparada aos poucos, ao abrir cada cifra, ou pelo botão **Preparar busca pelo texto**).
 - Etiquetas, favoritas e edição de nome/artista/tom.
 - Repertórios com adicionar, reordenar, remover e tocar em sequência.
 - Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF, para baixar ou compartilhar.
-- **Nuvem (Dropbox)**: entrar na conta, escolher a pasta das cifras e sincronizar quando quiser — **lista tudo sem baixar**, pergunta se quer baixar todas ou só listar, e permite **manter neste aparelho** ou **liberar espaço** por cifra. Abrir uma cifra que só está na nuvem baixa na hora.
-- **Guardar numa pasta do aparelho (cartão SD)** quando o navegador permite escolher uma pasta; sem suporte, usa o armazenamento interno do app.
-- Modo palco com PDF renderizado sob demanda, zoom, fundo invertido, troca de música e atalhos de teclado.
+- Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música e atalhos de teclado.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.
 - Tema claro/escuro salvo.
-- Funciona **offline** depois da primeira visita, inclusive abrindo PDFs.
+- Funciona **offline** depois da primeira visita, inclusive abrindo PDFs e imagens.
 - Instalável como PWA quando servido por HTTPS.
 
 ## Como rodar
@@ -50,55 +49,67 @@ theme-init.js            tema aplicado antes da primeira pintura
 sw.js                    service worker (cache offline)
 manifest.webmanifest     manifesto do PWA
 icons/                   ícones do app
-vendor/                  pdf.js 3.11.174, mammoth 1.6.0, JSZip 3.10.1, pdf-lib 1.17.1 e Dropbox SDK 10.47.0, com licenças
+vendor/                  pdf.js 3.11.174, mammoth 1.6.0, JSZip 3.10.1 e pdf-lib 1.17.1, com licenças
 ```
 
-Não há build nem dependências de CDN. As bibliotecas de PDF, DOCX, zip, junção de PDFs e nuvem são servidas da própria pasta.
+Não há build nem dependências de CDN. As bibliotecas de PDF, DOCX, zip e junção de PDFs são servidas da própria pasta.
 
-### Nuvem (Dropbox)
+### Pasta das cifras
 
-O botão ☁ abre a tela de nuvem. O login só aparece depois de preencher o **App key** em `config.js` — o passo a passo está no documento do projeto (seção 12.3) e também no próprio `config.js`. O App key não é segredo; nenhum token é guardado no repositório.
+O botão 📁 abre a tela da pasta. O app usa a **File System Access API** do navegador
+(`showDirectoryPicker`) para pedir acesso a uma pasta do aparelho. A escolha fica guardada
+no IndexedDB; ao abrir o app de novo, o navegador pode pedir para confirmar o acesso —
+basta tocar em **Reconectar**.
+
+A leitura é somente leitura: o app nunca grava nem apaga arquivos na pasta escolhida.
+Se o navegador não oferecer essa API (por exemplo, Firefox antigo), use
+**Importar arquivos / pasta**; nesse caso os arquivos são copiados para o armazenamento
+interno do app.
 
 ## Dados
 
-Tudo fica no IndexedDB do navegador, na base `cifras` (versão 2):
+Tudo fica no IndexedDB do navegador, na base `cifras` (versão 3):
 
-- `songs` — metadados (nome, artista, tom, etiquetas, favorita, origem, IDs do OneDrive, hash, datas).
-- `files` — o PDF/DOCX original em `Blob`.
+- `songs` — metadados (nome, artista, tom, etiquetas, favorita, origem, caminho na pasta, hash, datas).
+- `files` — arquivos importados como cópia em `Blob` (as cifras mapeadas da pasta **não** são copiadas).
 - `texts` — texto extraído para a busca.
 - `lists` — repertórios e ordem das músicas.
+- `handles` — a referência à pasta escolhida (File System Access API).
 
 A versão 1 do banco (protótipo antigo, com blob e texto dentro de `songs`) é migrada automaticamente na primeira abertura.
 
-Os campos `source`, `driveId`, `itemId`, `eTag` e `hash` já existem para a etapa 2 (OneDrive), mas a sincronização ainda **não** foi implementada.
+Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o estado de cada cifra. Cifras mapeadas usam `source: 'folder'` e `folderPath` (caminho relativo dentro da pasta).
 
 ## Limitações conhecidas
 
-- Ainda não sincroniza com o OneDrive; os dados ficam só no aparelho.
+- A pasta só pode ser mapeada em navegadores com a **File System Access API** (Chrome/Edge no Android, tablet e computador). Sem essa API, use **Importar arquivos / pasta** (cópia).
+- O navegador pode pedir para liberar o acesso à pasta de novo depois de fechar; toque em 📁 → **Reconectar**.
 - Cada arquivo importado tem limite de 100 MB. O zip e o PDF único do repertório são montados na memória do aparelho; repertórios muito grandes podem demorar ou falhar em tablets com pouca memória.
-- O PDF único inclui apenas as cifras em PDF. As cifras DOCX/DOC ficam de fora e o app avisa quais são; use o zip para levá-las.
+- O PDF único inclui apenas as cifras em PDF. DOC/DOCX e imagens ficam de fora e o app avisa quais são; use o zip para levá-las.
 - Ao abrir o app por `http://IP:8000`, o service worker e a instalação como PWA não funcionam. Além disso, o IndexedDB é separado por endereço e porta: se o IP do computador mudar, o tablet enxerga outro site e a biblioteca parece vazia. Para uso real, use um endereço HTTPS fixo.
 - `.doc` antigo é listado e pode ser baixado, mas não abre no navegador. Converta para `.docx` ou PDF.
-- PDFs escritos à mão no Samsung Notes não têm texto; a busca encontra só pelo nome.
+- PDFs escritos à mão (Samsung Notes) e imagens não têm texto; a busca encontra só pelo nome.
 - Não há transposição de tom.
-- O Safari pode limpar dados de sites pouco usados. Instalar na Tela de Início e manter o app em uso reduz o risco; o OneDrive será a cópia segura na etapa 2.
+- O Safari pode limpar dados de sites pouco usados. Instalar na Tela de Início e manter o app em uso reduz o risco; mantenha as cifras originais na pasta mapeada.
 - O visualizador abre PDFs página a página; arquivos muito grandes ainda dependem da memória do aparelho.
 
 ## Testes feitos
 
+- Mapeamento de pasta com PDF, DOCX e PNG, incluindo subpastas: os arquivos aparecem sozinhos na biblioteca, sem cópia, e a imagem abre no visualizador.
+- Releitura da pasta: arquivos novos entram e os removidos ficam marcados como ausentes, sem apagar metadados.
 - Importação de PDF de 3 páginas, PDF de 40 páginas e DOCX.
 - Busca sem acentos (`adoracao` encontra `adoração`).
 - Edição de metadados e reimportação com o mesmo nome, preservando nome, artista, tom e etiquetas.
 - Criação de repertório, adicionar, reordenar, tocar e excluir cifra com remoção do repertório.
 - Visualizador de PDF com renderização sob demanda (1 canvas visível de 40 páginas) e zoom.
-- Visualizador de DOCX.
+- Visualizador de DOCX e de imagens.
 - Exportação de repertório em zip, com dois arquivos na ordem correta (`01 - ...`, `02 - ...`), incluindo o caminho de "Compartilhar" com a tela de arquivo pronto.
 - PDF único do repertório: 4 páginas na ordem correta (3 de um PDF de 3 páginas + 1 de outro), com o texto preservado e a cifra DOCX avisada e excluída.
 - Tema persistente após recarregar.
 - Migração do banco versão 1 para a versão 2.
 - Uso offline com o servidor desligado, abrindo o app e um PDF.
 
-Ainda falta o teste real no tablet e no iPhone, principalmente o fluxo de edição com a caneta e o compartilhamento.
+Ainda falta o teste real no tablet e no iPhone, principalmente a escolha da pasta no navegador do tablet e o fluxo de edição com a caneta.
 
 ## Licenças de terceiros
 
@@ -106,4 +117,3 @@ Ainda falta o teste real no tablet e no iPhone, principalmente o fluxo de ediç�
 - mammoth.js — BSD 2-Clause (`vendor/LICENSE-mammoth.txt`).
 - JSZip — MIT ou GPLv3, à escolha; usamos MIT (`vendor/LICENSE-jszip.txt`).
 - pdf-lib — MIT (`vendor/LICENSE-pdflib.txt`).
-- Dropbox JavaScript SDK — MIT (`vendor/LICENSE-dropbox.txt`).

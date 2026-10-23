@@ -123,7 +123,7 @@ main {
 }
 .row .main { flex: 1; min-width: 0; cursor: pointer; background: none; border: 0; padding: 2px; text-align: left; border-radius: 6px; }
 .row .name { display: block; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.cloud-badge { font-size: 13px; color: var(--mu); vertical-align: baseline; }
+.file-badge { font-size: 13px; color: var(--mu); vertical-align: baseline; }
 .row .sub { display: block; font-size: 13px; color: var(--mu); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .row .actions { display: flex; gap: 4px; flex-shrink: 0; }
 .icon-btn { background: none; border: 0; padding: 5px 7px; font-size: 18px; line-height: 1; }
@@ -167,17 +167,6 @@ main {
   border-top: 1px solid var(--ln);
   font: 600 15px system-ui, sans-serif;
 }
-.cloud-folders { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; max-height: 40vh; overflow: auto; }
-.cloud-folder {
-  text-align: left;
-  padding: 12px 14px;
-  border: 1px solid var(--ln);
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-  font-size: 15px;
-}
-.cloud-folder:hover { background: var(--hl, rgba(0,0,0,0.05)); }
 
 /* ---------- visualizador ---------- */
 .viewer {
@@ -254,6 +243,20 @@ main {
 .doc table { max-width: 100%; border-collapse: collapse; }
 .doc td, .doc th { border: 1px solid #ccc; padding: 4px 6px; }
 .doc pre { white-space: pre-wrap; }
+.image-view {
+  display: flex;
+  justify-content: center;
+  width: max-content;
+  min-width: 100%;
+  margin: 0 auto;
+}
+.image-view img {
+  display: block;
+  height: auto;
+  background: #fff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, .28);
+}
+.folder-line { margin: -2px 0 12px; }
 .viewer-msg { text-align: center; color: var(--mu); padding: 40px 16px; line-height: 1.6; }
 
 /* ---------- modal ---------- */

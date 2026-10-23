@@ -21,7 +21,7 @@
     <div class="header-top">
       <h1>Cifras <span class="count" id="count"></span></h1>
       <button id="installBtn" class="primary" hidden>Instalar</button>
-      <button id="cloudBtn" class="icon-btn" title="Nuvem (Dropbox)" aria-label="Nuvem (Dropbox)">☁</button>
+      <button id="folderBtn" class="icon-btn" title="Pasta das cifras" aria-label="Pasta das cifras">📁</button>
       <button id="themeBtn" class="icon-btn" title="Alternar tema" aria-label="Alternar tema claro/escuro">◐</button>
     </div>
     <div class="tabs" role="tablist" aria-label="Seções">
@@ -60,14 +60,13 @@
     <div class="progress-track"><div id="progressBar"></div></div>
   </div>
 
-  <input type="file" id="fileInput" multiple accept=".pdf,.doc,.docx" hidden>
+  <input type="file" id="fileInput" multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp" hidden>
+  <input type="file" id="folderInput" webkitdirectory directory multiple accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.webp" hidden>
 
   <script src="./vendor/pdf.min.js"></script>
   <script src="./vendor/mammoth.browser.min.js"></script>
   <script src="./vendor/jszip.min.js"></script>
   <script src="./vendor/pdf-lib.min.js"></script>
-  <script src="./vendor/dropbox-sdk.min.js"></script>
-  <script src="./config.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
