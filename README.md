@@ -6,7 +6,8 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 
 ## O que já funciona
 
-- **Pasta das cifras**: escolha uma pasta do tablet (ou do computador) e o app lista automaticamente os PDF, DOC, DOCX e imagens (PNG/JPG) que estiverem nela, inclusive em subpastas. Os arquivos são lidos **direto da pasta**: nada é copiado, movido ou apagado. Ao colocar ou remover arquivos, use **Atualizar lista**.
+- **Pasta das cifras**: escolha uma pasta do tablet (ou do computador) e o app lista automaticamente os PDF, DOC, DOCX e imagens (PNG/JPG) que estiverem nela, inclusive em subpastas. As cifras são lidas **direto da pasta**: nada é copiado, movido ou apagado. Ao colocar ou remover arquivos, use **Atualizar lista**.
+- **Banco na pasta**: o app grava automaticamente `cifras-backup.json` na pasta escolhida (metadados, repertórios, textos, ocultos e arquivos importados). Serve para sincronizar a pasta com o OneDrive e restaurar em outro aparelho.
 - Importar PDF, DOCX, DOC, PNG e JPG avulsos (arrastando ou pelo botão), como alternativa quando o navegador não permite mapear uma pasta.
 - Busca instantânea por nome, artista, tom, etiqueta e texto da letra (todas as páginas dos PDFs; a busca pelo texto é preparada aos poucos, ao abrir cada cifra, ou pelo botão **Preparar busca pelo texto**).
 - Etiquetas, favoritas e edição de nome/artista/tom.
@@ -62,8 +63,10 @@ O botão 📁 abre a tela da pasta. O app usa a **File System Access API** do na
 no IndexedDB; ao abrir o app de novo, o navegador pode pedir para confirmar o acesso —
 basta tocar em **Reconectar**.
 
-A leitura é somente leitura: o app nunca grava nem apaga arquivos na pasta escolhida.
-Se o navegador não oferecer essa API (por exemplo, Firefox antigo), use
+A leitura das cifras é somente leitura: o app nunca altera nem apaga os arquivos da pasta.
+A única escrita é o arquivo `cifras-backup.json`, usado como banco portátil. Ele é atualizado
+automaticamente quando algo muda e também pode ser salvo ou restaurado pelos botões da tela
+da pasta. Se o navegador não oferecer essa API (por exemplo, Firefox antigo), use
 **Importar arquivos / pasta**; nesse caso os arquivos são copiados para o armazenamento
 interno do app.
 
@@ -76,6 +79,11 @@ Tudo fica no IndexedDB do navegador, na base `cifras` (versão 3):
 - `texts` — texto extraído para a busca.
 - `lists` — repertórios e ordem das músicas.
 - `handles` — a referência à pasta escolhida (File System Access API).
+
+Além do IndexedDB, a pasta escolhida guarda `cifras-backup.json` com os mesmos dados
+(metadados, repertórios, textos, ocultos e arquivos importados). Ele é regravado
+automaticamente depois de alterações e pode ser restaurado em outro aparelho pela tela
+da pasta. As cifras mapeadas não entram nesse arquivo: elas já estão na própria pasta.
 
 A versão 1 do banco (protótipo antigo, com blob e texto dentro de `songs`) é migrada automaticamente na primeira abertura.
 
@@ -97,7 +105,9 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 ## Testes feitos
 
 - Mapeamento de pasta com PDF, DOCX e PNG, incluindo subpastas: os arquivos aparecem sozinhos na biblioteca, sem cópia, e a imagem abre no visualizador.
+- Backup do banco em `cifras-backup.json` na pasta, automático e manual, com restauração conferida.
 - Releitura da pasta: arquivos novos entram e os removidos ficam marcados como ausentes, sem apagar metadados.
+- Repertório recolhível: clique no cabeçalho expande e mostra todas as músicas; na edição, a linha inteira é arrastada para reordenar.
 - Importação de PDF de 3 páginas, PDF de 40 páginas e DOCX.
 - Busca sem acentos (`adoracao` encontra `adoração`).
 - Edição de metadados e reimportação com o mesmo nome, preservando nome, artista, tom e etiquetas.

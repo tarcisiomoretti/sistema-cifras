@@ -367,17 +367,21 @@ async function getOne(store, key) {
 async function putOne(store, value) {
   if (!db) {
     mem[store].set(value.id, value);
+    scheduleBackup();
     return;
   }
   await tx(store, 'readwrite', (stores) => req(stores[0].put(value)));
+  scheduleBackup();
 }
 
 async function deleteOne(store, key) {
   if (!db) {
     mem[store].delete(key);
+    scheduleBackup();
     return;
   }
   await tx(store, 'readwrite', (stores) => req(stores[0].delete(key)));
+  scheduleBackup();
 }
 
 function metaOf(song) {
@@ -399,7 +403,49 @@ let dirHandle = null;          // FileSystemDirectoryHandle com acesso liberado
 let pendingDirHandle = null;   // pasta salva que ainda precisa de permissão
 let folderScanning = false;
 let folderIndexing = false;
+let backupTimer = 0;
+let backupRunning = false;
+let backupAgain = false;
+let restoreInProgress = false;
 const indexingIds = new Set();
+
+function scheduleBackup() {
+  if (!dirHandle || restoreInProgress) return;
+  // Só grava sozinho se a permissão de escrita já estiver liberada.
+  clearTimeout(backupTimer);
+  backupTimer = setTimeout(() => {
+    backupTimer = 0;
+    runAutoBackup();
+  }, 1800);
+}
+
+async function runAutoBackup() {
+  if (!dirHandle || restoreInProgress) return;
+  if (backupRunning) {
+    backupAgain = true;
+    return;
+  }
+  try {
+    if (typeof dirHandle.queryPermission === 'function') {
+      const permission = await dirHandle.queryPermission({ mode: 'readwrite' });
+      if (permission !== 'granted') return;
+    }
+  } catch (err) {
+    return;
+  }
+  backupRunning = true;
+  try {
+    await exportDbToFolder({ silent: true });
+  } catch (err) {
+    console.warn('Backup automático não gravado.', err);
+  } finally {
+    backupRunning = false;
+    if (backupAgain) {
+      backupAgain = false;
+      scheduleBackup();
+    }
+  }
+}
 
 function folderSupported() {
   return typeof window.showDirectoryPicker === 'function';
@@ -440,7 +486,7 @@ async function restoreDirHandle() {
     if (!handle) handle = await getOne('handles', 'dir');
     if (!handle) return null;
 
-    const permission = await handle.queryPermission({ mode: 'read' });
+    const permission = await handle.queryPermission({ mode: 'readwrite' });
     if (permission === 'granted') {
       dirHandle = handle;
       pendingDirHandle = null;
@@ -461,7 +507,7 @@ async function restoreDirHandle() {
 async function ensureFolderPermission() {
   if (dirHandle) {
     try {
-      if (await dirHandle.queryPermission({ mode: 'read' }) === 'granted') return true;
+      if (await dirHandle.queryPermission({ mode: 'readwrite' }) === 'granted') return true;
     } catch (err) { /* tenta pedir de novo */ }
   }
 
@@ -469,7 +515,7 @@ async function ensureFolderPermission() {
   if (!handle) return false;
 
   try {
-    const asked = await handle.requestPermission({ mode: 'read' });
+    const asked = await handle.requestPermission({ mode: 'readwrite' });
     if (asked === 'granted') {
       dirHandle = handle;
       pendingDirHandle = null;
@@ -491,7 +537,7 @@ async function pickLibraryFolder() {
   try {
     let handle;
     try {
-      handle = await window.showDirectoryPicker({ id: 'cifras', mode: 'read', startIn: 'documents' });
+      handle = await window.showDirectoryPicker({ id: 'cifras', mode: 'readwrite', startIn: 'documents' });
     } catch (err) {
       if (err && err.name === 'AbortError') return false;
       // Navegadores mais antigos não aceitam as opções.
@@ -533,6 +579,7 @@ function hiddenPaths() {
 function setHiddenPaths(list) {
   try {
     localStorage.setItem(HIDDEN_KEY, JSON.stringify(Array.from(new Set(list))));
+    scheduleBackup();
   } catch (err) { /* ignore */ }
 }
 
@@ -595,6 +642,7 @@ async function saveSongRecord(song, blob, text) {
     if (blob) mem.files.set(song.id, { id: song.id, blob });
     else mem.files.delete(song.id);
     mem.texts.set(song.id, { id: song.id, text: text || '' });
+    scheduleBackup();
     return;
   }
   await tx(['songs', 'files', 'texts'], 'readwrite', (stores) => {
@@ -607,6 +655,7 @@ async function saveSongRecord(song, blob, text) {
     else jobs.push(req(stores[1].delete(song.id)));
     return Promise.all(jobs);
   });
+  scheduleBackup();
 }
 
 async function saveMeta(song) {
@@ -626,6 +675,7 @@ async function deleteSongRecord(id) {
     mem.files.delete(id);
     mem.texts.delete(id);
     for (const list of updatedLists) mem.lists.set(list.id, list);
+    scheduleBackup();
     return updatedLists;
   }
 
@@ -639,6 +689,7 @@ async function deleteSongRecord(id) {
     return Promise.all(ops);
   });
 
+  scheduleBackup();
   return updatedLists;
 }
 
@@ -806,7 +857,9 @@ async function scanLibraryFolder(options = {}) {
 
     await loadAll();
     render();
-
+    // Garante que a pasta tenha o backup do banco mesmo sem alterações
+    // (por exemplo, na primeira vez que a pasta é escolhida).
+    scheduleBackup();
     const mapped = songs.filter((song) => song.folderPath).length;
     if (!options.silent) {
       const parts = [];
@@ -897,6 +950,214 @@ async function indexFolderTexts() {
 }
 
 /* ---------- tela da pasta ---------- */
+const BACKUP_FILENAME = 'cifras-backup.json';
+
+async function blobToBase64(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      const result = reader.result || '';
+      const base64 = String(result).split(',')[1] || '';
+      resolve(base64);
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+function base64ToBlob(base64, mimeType = 'application/octet-stream') {
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mimeType });
+}
+
+async function writeFileToFolder(filename, content) {
+  if (!dirHandle) return null;
+  try {
+    const handle = await dirHandle.getFileHandle(filename, { create: true });
+    const writable = await handle.createWritable();
+    await writable.write(content);
+    await writable.close();
+    return handle;
+  } catch (err) {
+    console.error('Falha ao gravar arquivo na pasta', err);
+    throw err;
+  }
+}
+
+async function readFileFromFolder(filename) {
+  if (!dirHandle) return null;
+  try {
+    const handle = await dirHandle.getFileHandle(filename);
+    return await handle.getFile();
+  } catch (err) {
+    return null;
+  }
+}
+
+async function exportDbToFolder(options = {}) {
+  const silent = Boolean(options.silent);
+  if (!dirHandle) {
+    if (!silent) toast('Escolha a pasta primeiro.', 'error');
+    return false;
+  }
+  if (!silent) {
+    const ok = await ensureFolderPermission();
+    if (!ok) {
+      toast('Libere o acesso à pasta para salvar o backup.', 'error');
+      return false;
+    }
+  }
+
+  try {
+    if (!silent) setProgress(0.05, 'Montando backup do banco...');
+    const [songMetas, listRecords, textRecords, fileRecords] = await Promise.all([
+      getAll('songs'),
+      getAll('lists'),
+      getAll('texts'),
+      getAll('files')
+    ]);
+
+    const files = [];
+    for (let i = 0; i < fileRecords.length; i++) {
+      const rec = fileRecords[i];
+      if (!rec || !rec.blob) continue;
+      if (!silent) {
+        setProgress(0.05 + (i / Math.max(1, fileRecords.length)) * 0.4, 'Salvando arquivos importados...');
+      }
+      try {
+        const base64 = await blobToBase64(rec.blob);
+        files.push({ id: rec.id, type: rec.blob.type || 'application/octet-stream', data: base64 });
+      } catch (err) {
+        console.warn('Não foi possível incluir arquivo no backup', rec.id, err);
+      }
+    }
+
+    if (!silent) setProgress(0.6, 'Gravando na pasta...');
+    const backup = {
+      app: 'sistema-cifras',
+      version: DB_VERSION,
+      exportedAt: Date.now(),
+      songs: songMetas,
+      lists: listRecords,
+      texts: textRecords,
+      hidden: hiddenPaths(),
+      files
+    };
+
+    const json = JSON.stringify(backup);
+    const blob = new Blob([json], { type: 'application/json' });
+    await writeFileToFolder(BACKUP_FILENAME, blob);
+    if (!silent) {
+      setProgress(null);
+      toast('Backup salvo na pasta: ' + BACKUP_FILENAME);
+    }
+    return true;
+  } catch (err) {
+    console.error('Falha ao salvar backup', err);
+    if (!silent) {
+      setProgress(null);
+      toast('Não foi possível salvar o backup na pasta.', 'error');
+    }
+    return false;
+  }
+}
+
+async function importDbFromFolder() {
+  if (!dirHandle) {
+    toast('Escolha a pasta primeiro.', 'error');
+    return false;
+  }
+  const ok = await ensureFolderPermission();
+  if (!ok) {
+    toast('Libere o acesso à pasta para restaurar o backup.', 'error');
+    return false;
+  }
+
+  const file = await readFileFromFolder(BACKUP_FILENAME);
+  if (!file) {
+    toast('Arquivo cifras-backup.json não encontrado nesta pasta.', 'error');
+    return false;
+  }
+
+  if (!confirm('Restaurar o banco a partir de cifras-backup.json?\n\nIsso irá sobrescrever metadados, listas, textos e arquivos importados neste aparelho. As cifras mapeadas da pasta permanecem.')) {
+    return false;
+  }
+
+  restoreInProgress = true;
+  clearTimeout(backupTimer);
+  backupTimer = 0;
+  try {
+    setProgress(0.05, 'Lendo backup...');
+    const text = await file.text();
+    const backup = JSON.parse(text);
+    if (!backup || backup.app !== 'sistema-cifras') {
+      toast('Backup inválido ou de outro app.', 'error');
+      setProgress(null);
+      return false;
+    }
+
+    setProgress(0.2, 'Restaurando metadados...');
+    if (!db) {
+      mem.songs.clear();
+      mem.lists.clear();
+      mem.texts.clear();
+      mem.files.clear();
+      (backup.songs || []).forEach((s) => mem.songs.set(s.id, s));
+      (backup.lists || []).forEach((l) => mem.lists.set(l.id, l));
+      (backup.texts || []).forEach((t) => mem.texts.set(t.id, t));
+    } else {
+      await tx(['songs', 'lists', 'texts', 'files'], 'readwrite', (stores) => {
+        const jobs = [];
+        const [songsStore, listsStore, textsStore, filesStore] = stores;
+        jobs.push(req(songsStore.clear()));
+        jobs.push(req(listsStore.clear()));
+        jobs.push(req(textsStore.clear()));
+        jobs.push(req(filesStore.clear()));
+        for (const s of backup.songs || []) jobs.push(req(songsStore.put(s)));
+        for (const l of backup.lists || []) jobs.push(req(listsStore.put(l)));
+        for (const t of backup.texts || []) jobs.push(req(textsStore.put(t)));
+        return Promise.all(jobs);
+      });
+    }
+    if (Array.isArray(backup.hidden)) setHiddenPaths(backup.hidden);
+
+    setProgress(0.5, 'Restaurando arquivos importados...');
+    const files = Array.isArray(backup.files) ? backup.files : [];
+    for (let i = 0; i < files.length; i++) {
+      const f = files[i];
+      if (!f || !f.id || !f.data) continue;
+      setProgress(0.5 + (i / Math.max(1, files.length)) * 0.4, 'Restaurando arquivo ' + (i + 1) + '/' + files.length);
+      try {
+        const blob = base64ToBlob(f.data, f.type || 'application/octet-stream');
+        if (db) {
+          await putOne('files', { id: f.id, blob });
+        } else {
+          mem.files.set(f.id, { id: f.id, blob });
+        }
+      } catch (err) {
+        console.warn('Falha ao restaurar arquivo', f.id, err);
+      }
+    }
+
+    setProgress(0.95, 'Recarregando...');
+    await loadAll();
+    render();
+    setProgress(null);
+    toast('Backup restaurado com sucesso.');
+    closeModal();
+    return true;
+  } catch (err) {
+    console.error('Falha ao restaurar backup', err);
+    setProgress(null);
+    toast('Não foi possível restaurar o backup.', 'error');
+    return false;
+  } finally {
+    restoreInProgress = false;
+  }
+}
+
 function openFolderModal() {
   const handle = dirHandle || pendingDirHandle;
   const name = handle ? handle.name : '';
@@ -917,8 +1178,8 @@ function openFolderModal() {
     ${supported
       ? `<p class="export-info">
           Escolha a pasta do tablet onde já estão as cifras. O app lê PDF, DOCX, DOC e imagens
-          (PNG/JPG) sem copiar nada para dentro do aplicativo. Ao adicionar ou remover arquivos
-          na pasta, toque em <strong>Atualizar lista</strong>.
+          (PNG/JPG) sem copiar nada para dentro do aplicativo. Só o arquivo de backup do banco
+          é gravado na pasta. Ao adicionar ou remover arquivos, toque em <strong>Atualizar lista</strong>.
         </p>
         <div class="modal-actions">
           <button class="primary grow" data-act="folder-pick">${name ? 'Trocar pasta' : 'Escolher pasta do tablet'}</button>
@@ -933,6 +1194,16 @@ function openFolderModal() {
           <strong>Importar arquivos / pasta</strong> e selecione tudo o que está dentro dela
           (isso cria uma cópia no aplicativo).
         </p>`}
+    <p class="export-title">Banco de dados nesta pasta</p>
+    <p class="export-info">
+      O banco (metadados, repertórios, textos e arquivos importados) é salvo em
+      <strong>cifras-backup.json</strong> nesta pasta, atualizado automaticamente quando algo muda.
+      Assim você pode sincronizar a pasta com o OneDrive. As cifras em si nunca são alteradas.
+    </p>
+    <div class="modal-actions">
+      <button data-act="folder-backup" ${dirHandle ? '' : 'disabled'}>Salvar backup agora</button>
+      <button data-act="folder-restore" ${dirHandle ? '' : 'disabled'}>Restaurar backup desta pasta</button>
+    </div>
     <p class="export-title">Outros arquivos</p>
     <p class="export-info">Também é possível importar arquivos avulsos ou uma pasta inteira como cópia.</p>
     <div class="modal-actions">
@@ -1265,15 +1536,13 @@ function listCard(list) {
   const rows = list.items.map((songId, index) => {
     const song = songById(songId);
     if (!song) return '';
+    const content = `<span class="name">${esc(song.name)}</span>
+        <span class="sub">${esc(song.artist || (song.type ? song.type.toUpperCase() : ''))}</span>`;
     return `<div class="row ${editing ? 'editing' : ''}" data-list="${list.id}" data-song="${song.id}" data-index="${index}">
+      <span class="index">${index + 1}</span>
       ${editing
-        ? `<button class="drag-handle" data-drag-handle aria-label="Arraste para reordenar ${esc(song.name)}"
-            title="Arraste para reordenar">⠿</button>`
-        : `<span class="index">${index + 1}</span>`}
-      <button class="main" data-act="play-list-song" data-list="${list.id}" data-index="${index}">
-        <span class="name">${esc(song.name)}</span>
-        <span class="sub">${esc(song.artist || (song.type ? song.type.toUpperCase() : ''))}</span>
-      </button>
+        ? `<div class="main edit-target" aria-label="Arraste para reordenar ${esc(song.name)}">${content}</div>`
+        : `<button class="main" data-act="play-list-song" data-list="${list.id}" data-index="${index}">${content}</button>`}
       ${song.key ? `<span class="key">${esc(song.key)}</span>` : ''}
       ${editing ? `<div class="actions">
         <button class="icon-btn danger" data-act="remove-from-list" data-list="${list.id}" data-index="${index}" aria-label="Remover do repertório">✕</button>
@@ -1282,12 +1551,12 @@ function listCard(list) {
   }).join('');
 
   return `<div class="list-card">
-    <div class="row list-head" data-list="${list.id}">
+    <div class="row list-head" data-act="toggle-list" data-list="${list.id}">
       <button class="main" data-act="toggle-list" data-list="${list.id}" aria-expanded="${expanded}">
         <span class="name"><span class="list-caret" aria-hidden="true">${expanded ? '▾' : '▸'}</span> ${esc(list.name)}</span>
         <span class="sub">${list.items.length} música(s)${editing ? ' · editando' : (expanded ? '' : ' · toque para abrir')}</span>
       </button>
-      <div class="actions">
+      <div class="actions" data-act="noop">
         <button class="primary" data-act="play-list" data-list="${list.id}" aria-label="Tocar repertório">▶<span class="label"> Tocar</span></button>
         <button data-act="edit-list" data-list="${list.id}">${editing ? 'Concluir' : 'Editar'}</button>
         <button data-act="export-list" data-list="${list.id}" ${list.items.length ? '' : 'disabled'}
@@ -1297,7 +1566,7 @@ function listCard(list) {
     </div>
     ${expanded ? (rows
       ? `<div class="list-songs">${rows}</div>
-        ${editing ? '<p class="hint drag-hint">Arraste pelo ⠿ para reordenar. Toque em ✕ para remover.</p>' : ''}`
+        ${editing ? '<p class="hint drag-hint">Segure e arraste a música para reordenar. Toque em ✕ para remover.</p>' : ''}`
       : '<div class="empty" style="padding:22px 12px">Repertório vazio. Toque em Editar para adicionar músicas.</div>') : ''}
     ${editing ? `<div class="add-box">
       <input type="search" data-addq="${list.id}" placeholder="Digite para buscar e adicionar…"
@@ -2545,13 +2814,15 @@ function bindEvents() {
   /* Arrastar e soltar para reordenar (funciona com toque e mouse). */
   main.addEventListener('pointerdown', (event) => {
     if (dragState) return;
-    const handle = event.target.closest('[data-drag-handle]');
-    if (!handle) return;
-    const row = handle.closest('.row[data-index]');
-    const container = row ? row.parentElement : null;
-    const listEl = row ? row.closest('[data-list]') : null;
+    const row = event.target.closest('.row[data-index]');
+    if (!row) return;
+    const container = row.parentElement;
+    const listEl = row.closest('[data-list]');
     const list = listEl ? listById(listEl.dataset.list) : null;
     if (!row || !container || !list || editingList !== list.id) return;
+    if (event.target.closest('[data-act="remove-from-list"]')) return;
+    if (event.target.closest('[data-act="play-list-song"]')) return;
+    if (event.target.closest('a') || event.target.closest('input') || event.target.closest('select') || event.target.closest('textarea')) return;
 
     event.preventDefault();
     dragState = {
@@ -2565,7 +2836,7 @@ function bindEvents() {
     row.classList.add('dragging');
     document.body.classList.add('dragging-row');
     try {
-      handle.setPointerCapture(event.pointerId);
+      row.setPointerCapture(event.pointerId);
     } catch (err) { /* ignore */ }
   });
 
@@ -2657,6 +2928,12 @@ function bindEvents() {
       } else if (action === 'folder-index') {
         closeModal();
         await indexFolderTexts();
+      } else if (action === 'folder-backup') {
+        closeModal();
+        await exportDbToFolder();
+      } else if (action === 'folder-restore') {
+        closeModal();
+        await importDbFromFolder();
       } else if (action === 'folder-forget') {
         if (confirm('Esquecer a pasta "' +
           ((dirHandle || pendingDirHandle) ? (dirHandle || pendingDirHandle).name : '') +

@@ -18,8 +18,15 @@
   O app usa `showDirectoryPicker` (File System Access API) para o usuário escolher
   uma pasta do tablet. A pasta fica guardada no IndexedDB e é relida ao abrir o app.
 - **A pasta vira a biblioteca.** O app varre a pasta e as subpastas e lista
-  automaticamente **PDF, DOC, DOCX, PNG, JPG e WEBP**. Nada é copiado, movido ou
-  apagado do tablet. Ao adicionar/remover arquivos, use **Atualizar lista**.
+  automaticamente **PDF, DOC, DOCX, PNG, JPG e WEBP**. As cifras não são copiadas,
+  movidas ou apagadas do tablet. Ao adicionar/remover arquivos, use **Atualizar lista**.
+- **Banco de dados na pasta.** O app grava `cifras-backup.json` na pasta escolhida,
+  atualizado automaticamente após alterações. O arquivo inclui metadados, repertórios,
+  textos, cifras ocultas e arquivos importados manualmente. Dá para salvar na hora ou
+  restaurar pela tela da pasta; as cifras em si continuam intactas.
+- **Repertórios recolhíveis e arrastáveis.** Clicar no cabeçalho expande e mostra todas
+  as músicas. Em **Editar**, a linha inteira pode ser arrastada para reordenar (sem
+  setinhas ou alça).
 - **Imagens abrem no visualizador**, com zoom, como os PDFs.
 - **Busca pelo texto** dos PDFs/DOCX é preparada aos poucos ao abrir cada cifra;
   também existe o botão **Preparar busca pelo texto** na tela da pasta.
@@ -29,12 +36,9 @@
   etiquetas, favoritas e repertórios.
 - Importação manual continua disponível como alternativa (PDF, DOC, DOCX, PNG, JPG)
   e como cópia no armazenamento interno.
-- **Repertórios recolhíveis.** Cada repertório aparece fechado; ao tocar no nome,
-  ele expande e mostra todas as músicas. O botão **Editar** abre o repertório e
-  libera a busca para adicionar músicas.
-- **Reordenar arrastando.** No modo de edição, arraste pelo ícone **⠿** para
-  mudar a ordem das músicas (funciona com toque no tablet e com o mouse).
-- O `sw.js` foi para **`cifras-v8`**.
+- O `sw.js` foi para **`cifras-v9`**.
+- A pasta passa a pedir permissão de **leitura e escrita**, porque grava o backup do
+  banco. Ainda assim, o app só escreve `cifras-backup.json`; as cifras nunca são tocadas.
 
 ## Como testar no tablet
 
@@ -45,8 +49,10 @@
 5. Abrir um PDF, um DOCX e uma imagem.
 6. Fechar e abrir o app; se o navegador pedir, tocar em **📁 → Reconectar**.
 7. Colocar um arquivo novo na pasta e tocar em **📁 → Atualizar lista**.
-8. Em **Repertórios**, tocar no nome de um repertório para expandir; tocar em
-   **Editar** e arrastar pelo **⠿** para conferir a nova ordem.
+8. Conferir se `cifras-backup.json` apareceu na pasta (o app pode pedir permissão
+   de escrita). Alterar algo e verificar que o arquivo é atualizado.
+9. Em **Repertórios**, tocar no cabeçalho para expandir; tocar em **Editar** e
+   arrastar a linha da música para conferir a nova ordem.
 
 ## Pendências conhecidas / decisões em aberto
 
@@ -68,7 +74,7 @@
 ## Fluxo de publicação (lembrete)
 
 1. Alterar os arquivos.
-2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v8`).
+2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v9`).
 3. `git commit` + `git push origin main`.
 4. O GitHub Pages publica sozinho em ~1 minuto.
 
@@ -78,7 +84,10 @@
 - Selenium no venv: `/tmp/opencode/venv` (selenium + esprima).
 - Firefox headless: `/snap/firefox/current/usr/lib/firefox/firefox`.
 - Servidor local: `python3 -m http.server 8765 --bind 127.0.0.1`.
-- Teste do mapeamento de pasta: `/tmp/opencode/smoke_pasta.py` (mock de
-  `showDirectoryPicker` com PDF/PNG/DOCX e subpasta).
+- Teste do mapeamento de pasta e backup do banco: `/tmp/opencode/smoke_pasta.py`
+  (mock de `showDirectoryPicker` com PNG/DOCX em subpasta, gravação e restauração
+  de `cifras-backup.json`).
+- Teste de repertório: `/tmp/opencode/smoke_repertorio.py` (expansão ao clicar e
+  arraste da linha inteira no modo de edição).
 - Checagem de sintaxe: `esprima` (trocar `6_000_000` por `6000000` antes de validar).
 - `gh` autenticado como `tarcisiomoretti`.

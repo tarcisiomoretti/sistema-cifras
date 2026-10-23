@@ -150,27 +150,23 @@ main {
 
 /* ---------- repertórios ---------- */
 .list-card { margin-bottom: 22px; }
-.list-head { background: var(--ch); }
+.list-head { background: var(--ch); cursor: pointer; }
+.list-head .actions { cursor: default; }
 .list-head .main { cursor: pointer; }
 .list-caret { color: var(--mu); font-size: 12px; }
 .list-head .main[aria-expanded="true"] .list-caret { color: var(--ac); }
 .list-songs { margin-top: 6px; }
 .list-songs .row { margin-bottom: 6px; }
 .list-songs .index { width: 24px; text-align: center; font-weight: 600; color: var(--mu); flex-shrink: 0; }
-.drag-handle {
-  background: none;
-  border: 0;
-  padding: 6px 8px;
-  min-width: 34px;
-  min-height: 38px;
-  font-size: 20px;
-  line-height: 1;
-  color: var(--mu);
+.list-songs .row.editing {
   cursor: grab;
   touch-action: none;
-  flex-shrink: 0;
+  -webkit-user-select: none;
+  user-select: none;
+  border: 1px dashed var(--ln);
 }
-.drag-handle:active { cursor: grabbing; }
+.list-songs .row.editing:active { cursor: grabbing; }
+.list-songs .row.editing .main { cursor: inherit; }
 .drag-hint { margin: 2px 4px 10px; }
 .row.dragging {
   position: relative;
