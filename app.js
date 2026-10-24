@@ -18,7 +18,6 @@ const OPEN_LIST_KEY = 'cifras-open-list';
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB por arquivo
 const MAX_CANVAS_PIXELS = 6_000_000;
 const MAX_ZIP_BYTES = 100 * 1024 * 1024; // aviso antes de montar zip muito grande
-const FOLDER_INDEX_KEY = 'folderIndex';
 
 /* ---------- estado ---------- */
 let db = null;
@@ -243,30 +242,6 @@ async function requestPersistence() {
   } catch (err) {
     /* sem problema: alguns navegadores não permitem */
   }
-}
-
-/* ---------- índice da pasta (cache para evitar varredura completa) ---------- */
-async function getFolderIndex() {
-  if (!db) return null;
-  try {
-    return await getOne('handles', FOLDER_INDEX_KEY);
-  } catch (err) {
-    return null;
-  }
-}
-
-async function saveFolderIndex(index) {
-  if (!db) return;
-  try {
-    await tx(['handles'], 'readwrite', (stores) => req(stores[0].put(index, FOLDER_INDEX_KEY)));
-  } catch (err) { /* ignore */ }
-}
-
-async function clearFolderIndex() {
-  if (!db) return;
-  try {
-    await tx(['handles'], 'readwrite', (stores) => req(stores[0].delete(FOLDER_INDEX_KEY)));
-  } catch (err) { /* ignore */ }
 }
 
 /* ============================================================
@@ -644,7 +619,6 @@ async function forgetLibraryFolder() {
   try {
     await deleteOne('handles', 'library');
     await deleteOne('handles', 'dir');
-    await clearFolderIndex();
   } catch (err) { /* ignore */ }
 }
 
@@ -814,8 +788,11 @@ async function loadFile(song) {
     if (!dirHandle && pendingDirHandle) await ensureFolderPermission();
   }
   if (!hadFolder && dirHandle && song.folderPath) {
-    // A pasta acabou de ser reconectada. Não re-sincroniza toda a biblioteca
-    // automaticamente ao abrir um arquivo; o usuário pode usar "Atualizar lista".
+    // A pasta acabou de ser reconectada: relê os caminhos em segundo plano
+    // para tirar o aviso de "ausente" das outras cifras também.
+    setTimeout(() => {
+      if (dirHandle && !folderScanning) scanLibraryFolder({ silent: true });
+    }, 1500);
   }
   if (song.folderPath && dirHandle) {
     const file = await getFileByPath(song.folderPath);
@@ -980,41 +957,12 @@ async function scanLibraryFolder(options = {}) {
   let found = 0;
   let hiddenCount = 0;
   let limitReached = false;
-  let usedCache = false;
-  let cachedIndex = null;
-  const indexEntries = [];
 
   try {
-    // Caminho rápido com cache: em modo silencioso, usa índice salvo para marcar ausentes
-    // sem percorrer toda a árvore da pasta (evita lentidão com ~2000 arquivos).
-    if (options.silent && dirHandle) {
-      cachedIndex = await getFolderIndex();
-      if (cachedIndex && cachedIndex.dirName === dirHandle.name && Array.isArray(cachedIndex.entries) && cachedIndex.entries.length) {
-        usedCache = true;
-        setProgress(0.1, 'Verificando com índice da pasta…');
-        for (const entry of cachedIndex.entries) {
-          if (!entry || !entry.path) continue;
-          const relativeKey = comparablePath(entry.path);
-          seenKeys.add(relativeKey);
-          if (hidden.has(relativeKey)) {
-            hiddenCount++;
-          }
-        }
-      }
-    }
-
-    if (!usedCache) {
-      setProgress(0.05, 'Lendo a pasta ' + dirHandle.name + '…');
-      const items = await collectFolderFiles(dirHandle, '', 0, []);
-      if (items.length >= MAX_FOLDER_FILES) limitReached = true;
-      const scannedPaths = new Set(items.map((item) => comparablePath(item.path))); 
-
-      for (const item of items) {
-        found++;
-        if (found > MAX_FOLDER_FILES) break;
-        const relativePath = item.path;
-        const relativeKey = comparablePath(relativePath);
-        seenKeys.add(relativeKey);
+    setProgress(0.05, 'Lendo a pasta ' + dirHandle.name + '…');
+    const items = await collectFolderFiles(dirHandle, '', 0, []);
+    if (items.length >= MAX_FOLDER_FILES) limitReached = true;
+    const scannedPaths = new Set(items.map((item) => comparablePath(item.path)));
 
     for (const item of items) {
       found++;
@@ -1118,119 +1066,24 @@ async function scanLibraryFolder(options = {}) {
         await saveMeta(song);
       }
 
-      if (!options.silent) {
-        try {
-          indexEntries.push({ path: relativePath, name: file.name, size: file.size });
-        } catch (err) { /* ignore */ }
-      }
-
       if (found % 10 === 0) {
         const fraction = Math.min(0.95, 0.15 + found / MAX_FOLDER_FILES);
         setProgress(fraction, 'Encontrados ' + found + ' arquivo(s)…');
-      }
-      }
-
-      // Salva índice leve da pasta apenas em scan explícito (botão "Atualizar lista")
-      if (!options.silent && dirHandle) {
-        try {
-          await saveFolderIndex({
-            dirName: dirHandle.name,
-            scannedAt: Date.now(),
-            entries: indexEntries
-          });
-        } catch (err) { /* ignore */ }
-      }
-    } else if (cachedIndex) {
-      // Usando cache: atualiza metadados de cifras já mapeadas sem varrer a árvore
-      const scannedPaths = new Set(cachedIndex.entries.map((entry) => comparablePath(entry.path)));
-      for (const entry of cachedIndex.entries) {
-        if (!entry || !entry.path) continue;
-        const relativePath = entry.path;
-        const relativeKey = comparablePath(relativePath);
-
-        if (hidden.has(relativeKey)) {
-          continue;
-        }
-
-        let song = songs.find((candidate) => candidate.folderPath &&
-          comparablePath(candidate.folderPath) === relativeKey);
-        if (!song) {
-          song = songs.find((candidate) => !candidate.folderPath && candidate.source !== 'folder' &&
-            entry.name && comparableName(candidate.file) === comparableName(entry.name) &&
-            ((!candidate.size && !entry.size) || (!candidate.size || !entry.size || Number(candidate.size) === Number(entry.size))));
-        }
-        if (!song) {
-          const candidates = songs.filter((candidate) => {
-            if (!candidate.folderPath) return false;
-            if (scannedPaths.has(comparablePath(candidate.folderPath))) return false;
-            if (entry.name && comparableName(candidate.file) !== comparableName(entry.name)) return false;
-            if (candidate.size && entry.size && Number(candidate.size) !== Number(entry.size)) return false;
-            return true;
-          });
-          if (candidates.length === 1) song = candidates[0];
-        }
-
-        if (!song) continue;
-
-        const previousFolderPath = song.folderPath;
-        const sizeChanged = Number(song.size) !== Number(entry.size);
-        const changed = song.file !== entry.name ||
-          sizeChanged ||
-          song.folderPath !== relativePath ||
-          song.missing ||
-          song.source !== 'folder';
-
-        song.file = entry.name || song.file;
-        song.size = entry.size != null ? entry.size : song.size;
-        song.folderPath = relativePath;
-        song.source = 'folder';
-        song.storage = 'folder';
-        song.missing = false;
-
-        if (sizeChanged && previousFolderPath) {
-          song.annotationsFlattened = false;
-          await clearOriginalBackup(song, previousFolderPath);
-        } else if (previousFolderPath && previousFolderPath !== relativePath) {
-          await moveOriginalBackup(previousFolderPath, relativePath);
-        }
-
-        if (changed) {
-          updated++;
-          buildHay(song);
-          await saveMeta(song);
-        }
       }
     }
 
     // Marca (sem apagar) as cifras que sumiram da pasta.
     let missing = 0;
-    if (!options.silent) {
-      for (const song of songs) {
-        if (song.source !== 'folder' || !song.folderPath) continue;
-        const key = comparablePath(song.folderPath);
-        if (!seenKeys.has(key) && !song.missing) {
-          song.missing = true;
-          await saveMeta(song);
-          missing++;
-        } else if (seenKeys.has(key) && song.missing) {
-          song.missing = false;
-          await saveMeta(song);
-        }
-      }
-    } else if (added > 0 || updated > 0) {
-      // Em modo silencioso só revisa ausentes se houve mudanças reais
-      // para evitar percorrer toda a lista de 2000 cifras sem necessidade.
-      for (const song of songs) {
-        if (song.source !== 'folder' || !song.folderPath) continue;
-        const key = comparablePath(song.folderPath);
-        if (!seenKeys.has(key) && !song.missing) {
-          song.missing = true;
-          await saveMeta(song);
-          missing++;
-        } else if (seenKeys.has(key) && song.missing) {
-          song.missing = false;
-          await saveMeta(song);
-        }
+    for (const song of songs) {
+      if (song.source !== 'folder' || !song.folderPath) continue;
+      const key = comparablePath(song.folderPath);
+      if (!seenKeys.has(key) && !song.missing) {
+        song.missing = true;
+        await saveMeta(song);
+        missing++;
+      } else if (seenKeys.has(key) && song.missing) {
+        song.missing = false;
+        await saveMeta(song);
       }
     }
 
