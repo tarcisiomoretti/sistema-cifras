@@ -18,6 +18,7 @@ const OPEN_LIST_KEY = 'cifras-open-list';
 const MAX_FILE_BYTES = 100 * 1024 * 1024; // 100 MB por arquivo
 const MAX_CANVAS_PIXELS = 6_000_000;
 const MAX_ZIP_BYTES = 100 * 1024 * 1024; // aviso antes de montar zip muito grande
+const FOLDER_INDEX_KEY = 'cifras-folder-index';
 
 /* ---------- estado ---------- */
 let db = null;
@@ -242,6 +243,30 @@ async function requestPersistence() {
   } catch (err) {
     /* sem problema: alguns navegadores não permitem */
   }
+}
+
+/* ---------- índice da pasta ---------- */
+async function getFolderIndex() {
+  if (!db) return null;
+  try {
+    return await getOne('handles', FOLDER_INDEX_KEY);
+  } catch (err) {
+    return null;
+  }
+}
+
+async function saveFolderIndex(index) {
+  if (!db) return;
+  try {
+    await tx(['handles'], 'readwrite', (stores) => req(stores[0].put(index, FOLDER_INDEX_KEY)));
+  } catch (err) { /* ignore */ }
+}
+
+async function clearFolderIndex() {
+  if (!db) return;
+  try {
+    await tx(['handles'], 'readwrite', (stores) => req(stores[0].delete(FOLDER_INDEX_KEY)));
+  } catch (err) { /* ignore */ }
 }
 
 /* ============================================================
@@ -619,6 +644,7 @@ async function forgetLibraryFolder() {
   try {
     await deleteOne('handles', 'library');
     await deleteOne('handles', 'dir');
+    await clearFolderIndex();
   } catch (err) { /* ignore */ }
 }
 
@@ -788,11 +814,8 @@ async function loadFile(song) {
     if (!dirHandle && pendingDirHandle) await ensureFolderPermission();
   }
   if (!hadFolder && dirHandle && song.folderPath) {
-    // A pasta acabou de ser reconectada: relê os caminhos em segundo plano
-    // para tirar o aviso de "ausente" das outras cifras também.
-    setTimeout(() => {
-      if (dirHandle && !folderScanning) scanLibraryFolder({ silent: true });
-    }, 1500);
+    // A pasta acabou de ser reconectada. Não re-sincroniza toda a biblioteca
+    // automaticamente ao abrir um arquivo; use "Atualizar lista" se precisar.
   }
   if (song.folderPath && dirHandle) {
     const file = await getFileByPath(song.folderPath);
@@ -957,12 +980,32 @@ async function scanLibraryFolder(options = {}) {
   let found = 0;
   let hiddenCount = 0;
   let limitReached = false;
+  let usedCache = false;
+  let cachedIndex = null;
+  const indexEntries = [];
 
   try {
-    setProgress(0.05, 'Lendo a pasta ' + dirHandle.name + '…');
-    const items = await collectFolderFiles(dirHandle, '', 0, []);
-    if (items.length >= MAX_FOLDER_FILES) limitReached = true;
-    const scannedPaths = new Set(items.map((item) => comparablePath(item.path)));
+    if (options.silent && dirHandle) {
+      try {
+        cachedIndex = await getFolderIndex();
+        if (cachedIndex && cachedIndex.dirName === dirHandle.name && Array.isArray(cachedIndex.entries) && cachedIndex.entries.length) {
+          usedCache = true;
+          setProgress(0.1, 'Verificando com índice da pasta…');
+          for (const entry of cachedIndex.entries) {
+            if (!entry || !entry.path) continue;
+            const key = comparablePath(entry.path);
+            seenKeys.add(key);
+            if (hidden.has(key)) hiddenCount++;
+          }
+        }
+      } catch (err) { /* ignora cache */ }
+    }
+
+    if (!usedCache) {
+      setProgress(0.05, 'Lendo a pasta ' + dirHandle.name + '…');
+      const items = await collectFolderFiles(dirHandle, '', 0, []);
+      if (items.length >= MAX_FOLDER_FILES) limitReached = true;
+      const scannedPaths = new Set(items.map((item) => comparablePath(item.path)));
 
     for (const item of items) {
       found++;
@@ -1066,24 +1109,85 @@ async function scanLibraryFolder(options = {}) {
         await saveMeta(song);
       }
 
+      if (!options.silent) {
+        try {
+          indexEntries.push({ path: relativePath, name: file.name, size: file.size });
+        } catch (err) { /* ignore */ }
+      }
+
       if (found % 10 === 0) {
         const fraction = Math.min(0.95, 0.15 + found / MAX_FOLDER_FILES);
         setProgress(fraction, 'Encontrados ' + found + ' arquivo(s)…');
+      }
+      }
+
+      if (!options.silent && dirHandle) {
+        try {
+          await saveFolderIndex({ dirName: dirHandle.name, scannedAt: Date.now(), entries: indexEntries });
+        } catch (err) { /* ignore */ }
+      }
+    } else if (usedCache && cachedIndex) {
+      const scannedPaths = new Set(cachedIndex.entries.map(e => comparablePath(e.path)));
+      for (const entry of cachedIndex.entries) {
+        if (!entry || !entry.path) continue;
+        if (hidden.has(comparablePath(entry.path))) continue;
+        let song = songs.find(c => c.folderPath && comparablePath(c.folderPath) === comparablePath(entry.path));
+        if (!song) {
+          song = songs.find(c => !c.folderPath && c.source !== 'folder' && entry.name && comparableName(c.file) === comparableName(entry.name) && ((!c.size && !entry.size) || (!c.size || !entry.size || Number(c.size) === Number(entry.size))));
+        }
+        if (!song) {
+          const candidates = songs.filter(c => {
+            if (!c.folderPath) return false;
+            if (scannedPaths.has(comparablePath(c.folderPath))) return false;
+            if (entry.name && comparableName(c.file) !== comparableName(entry.name)) return false;
+            if (c.size && entry.size && Number(c.size) !== Number(entry.size)) return false;
+            return true;
+          });
+          if (candidates.length === 1) song = candidates[0];
+        }
+        if (!song) continue;
+        const prev = song.folderPath;
+        const sizeChanged = Number(song.size) !== Number(entry.size);
+        const changed = song.file !== entry.name || sizeChanged || song.folderPath !== entry.path || song.missing || song.source !== 'folder';
+        song.file = entry.name || song.file;
+        song.size = entry.size != null ? entry.size : song.size;
+        song.folderPath = entry.path;
+        song.source = 'folder';
+        song.storage = 'folder';
+        song.missing = false;
+        if (sizeChanged && prev) { song.annotationsFlattened = false; await clearOriginalBackup(song, prev); }
+        else if (prev && prev !== entry.path) { await moveOriginalBackup(prev, entry.path); }
+        if (changed) { updated++; buildHay(song); await saveMeta(song); }
       }
     }
 
     // Marca (sem apagar) as cifras que sumiram da pasta.
     let missing = 0;
-    for (const song of songs) {
-      if (song.source !== 'folder' || !song.folderPath) continue;
-      const key = comparablePath(song.folderPath);
-      if (!seenKeys.has(key) && !song.missing) {
-        song.missing = true;
-        await saveMeta(song);
-        missing++;
-      } else if (seenKeys.has(key) && song.missing) {
-        song.missing = false;
-        await saveMeta(song);
+    if (!options.silent || usedCache) {
+      for (const song of songs) {
+        if (song.source !== 'folder' || !song.folderPath) continue;
+        const key = comparablePath(song.folderPath);
+        if (!seenKeys.has(key) && !song.missing) {
+          song.missing = true;
+          await saveMeta(song);
+          missing++;
+        } else if (seenKeys.has(key) && song.missing) {
+          song.missing = false;
+          await saveMeta(song);
+        }
+      }
+    } else if (added > 0 || updated > 0) {
+      for (const song of songs) {
+        if (song.source !== 'folder' || !song.folderPath) continue;
+        const key = comparablePath(song.folderPath);
+        if (!seenKeys.has(key) && !song.missing) {
+          song.missing = true;
+          await saveMeta(song);
+          missing++;
+        } else if (seenKeys.has(key) && song.missing) {
+          song.missing = false;
+          await saveMeta(song);
+        }
       }
     }
 

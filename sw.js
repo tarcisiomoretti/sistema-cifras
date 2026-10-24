@@ -1,6 +1,6 @@
 /* Service worker do Sistema de Cifras.
    Aumente CACHE_VERSION sempre que publicar uma versão nova. */
-const CACHE_VERSION = 'cifras-v15';
+const CACHE_VERSION = 'cifras-v16';
 const APP_SHELL = [
   './',
   './index.html',
