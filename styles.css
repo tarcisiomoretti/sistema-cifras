@@ -202,6 +202,9 @@ body.dragging-row {
   background: var(--bg);
   padding-top: env(safe-area-inset-top, 0px);
   padding-bottom: env(safe-area-inset-bottom, 0px);
+  /* A pinsa é tratada pelo app; evita o zoom da página inteira, que
+     escondia a barra de botões do visualizador. */
+  touch-action: pan-x pan-y;
 }
 .viewer.show { display: flex; }
 .viewer-bar {

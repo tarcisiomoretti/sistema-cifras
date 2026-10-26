@@ -41,11 +41,11 @@ A versão corrigida está nesta pasta, separada em arquivos (`index.html`, `styl
 - O botão **Editar** do repertório permite adicionar, reordenar (arrastando pelo ícone ⠿) e remover músicas.
 - Para adicionar, há um campo de busca com **filtro ao digitar**: aparecem as músicas que combinam, com o tom e um botão ＋.
 - O botão **⤓ Exportar** monta um `.zip` com os arquivos originais na ordem do repertório (`01 - Nome.pdf`), para baixar ou compartilhar.
-- O mesmo botão oferece o **PDF único**: junta as cifras em PDF e as imagens (PNG/JPEG; WebP é convertido) num só arquivo, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular. As cifras DOCX/DOC ficam de fora, com aviso.
+- O mesmo botão oferece o **PDF único**: junta as cifras em PDF e as imagens (PNG/JPEG; WebP é convertido) num só arquivo, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular. Todas as páginas saem no mesmo tamanho A4. As cifras DOCX/DOC ficam de fora, com aviso.
 
 ### Visualizador (modo palco)
 
-- Tela cheia, com **zoom** (− e +) e rolagem.
+- Tela cheia, com **zoom** (− e +), pinsa de dois dedos e rolagem. A pinsa usa o zoom do app e mantém a barra de botões fixa no topo.
 - Botões ◀ ▶ para trocar de música (e setas do teclado). Dentro de um repertório, seguem a ordem dele.
 - Botão ◐ para inverter as cores (fundo escuro).
 - **✎ Abrir:** baixa o arquivo original (PDF ou DOCX) para editar no Word, no Samsung Notes ou em outro app.
@@ -192,7 +192,7 @@ vendor/                  pdf.js 3.11.174 + mammoth 1.6.0 + JSZip 3.10.1 + pdf-li
 
 - **Download independente do artifact:** `✎ Abrir` usa um download comum do navegador, com `Blob` e `<a download>`, e `⤴ Compartilhar` usa `navigator.share` com o arquivo anexado, caindo para download quando não houver compartilhamento.
 - **Offline de verdade:** pdf.js, mammoth, JSZip e pdf-lib agora são locais (`vendor/`) e entram no cache do service worker. O app abre, lê PDFs/DOCX e monta o zip e o PDF único sem internet depois da primeira visita.
-- **Exportação de repertório:** o botão ⤓ Exportar monta um `.zip` com os arquivos originais, na ordem do repertório e sem recompressão, e também um **PDF único** juntando as cifras em PDF e as imagens com pdf-lib (as páginas são copiadas como estão, preservando inclusive cifras escritas à mão; imagens viram páginas A4). Ambos com opção de baixar ou compartilhar.
+- **Exportação de repertório:** o botão ⤓ Exportar monta um `.zip` com os arquivos originais, na ordem do repertório e sem recompressão, e também um **PDF único** juntando as cifras em PDF e as imagens com pdf-lib. Todas as páginas são ajustadas para o mesmo tamanho A4, sem corte, preservando o conteúdo (inclusive cifras escritas à mão); imagens também viram páginas A4. Ambos com opção de baixar ou compartilhar.
 - **Importação mais segura:** limite de 100 MB por arquivo, progresso por página na leitura de PDFs, aviso de arquivo grande e trava para não importar duas vezes ao mesmo tempo.
 - **Visualizador sem canvas duplicado:** cada página só é desenhada uma vez por vez, e páginas que saíram da tela são liberadas mesmo durante o zoom.
 - **PDFs grandes sem travar:** o visualizador cria as páginas sob demanda e libera as que saem da tela. Também limita a resolução do canvas, cancela desenhos antigos ao trocar de música/zoom e destrói o documento ao fechar.
@@ -243,7 +243,7 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
 #### Opção B: um único PDF com todas as cifras
 
 - Junta as cifras **na ordem do repertório** em um só arquivo PDF, bom para ler, imprimir ou mandar pelo celular.
-- Para PDFs, as páginas são copiadas como estão, com uma biblioteca de PDF (pdf-lib). Isso mantém o texto e também as **cifras escritas à mão** do Samsung Notes, sem perda de qualidade.
+- Para PDFs, as páginas são incorporadas com uma biblioteca de PDF (pdf-lib) e ajustadas para o mesmo tamanho A4, sem corte. Isso mantém o texto e também as **cifras escritas à mão** do Samsung Notes, sem perda de qualidade.
 - **O ponto delicado são os arquivos DOCX e .doc**, que não podem ser juntados diretamente a um PDF. Há três caminhos:
   1. Avisar quais cifras ficaram de fora e deixar a escolha ao usuário.
   2. Converter no navegador, desenhando o DOCX como página. Funciona, mas o alinhamento dos acordes sobre a letra pode mudar.
@@ -260,7 +260,7 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
 
 - **Memória e tempo:** repertórios com muitas cifras ou PDFs grandes podem demorar no tablet e no iPhone. O app deve mostrar o andamento (por exemplo, “montando 5 de 12”) e não travar a tela.
 - **Tamanho do arquivo:** alguns apps de mensagem limitam o tamanho de anexos. Se o zip ou o PDF ficar grande, vale avisar o tamanho antes de enviar.
-- **Fidelidade:** o zip nunca altera os arquivos. O PDF único preserva PDFs fielmente e coloca imagens em páginas A4, mas pode alterar DOCX se for convertido no navegador.
+- **Fidelidade:** o zip nunca altera os arquivos. O PDF único preserva o conteúdo dos PDFs, mas padroniza todas as páginas em A4; imagens também viram páginas A4. Pode alterar DOCX se for convertido no navegador.
 - **Privacidade:** tudo é montado no aparelho. Os arquivos só saem dele quando você compartilha ou baixa.
 
 ### 10.4 Onde isso entra na ordem de trabalho

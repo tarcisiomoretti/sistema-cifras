@@ -52,6 +52,7 @@ let currentDocSongId = null;
 let renderGeneration = 0;
 let preloadToken = 0;
 let swipeState = null;
+let pinchState = null;
 const preloadedFiles = new Map();
 const preloadedPdfDocs = new Map();
 const preloadPromises = new Map();
@@ -2486,22 +2487,118 @@ async function imageDataForSong(song) {
   return imageBlobToPng(blob);
 }
 
-async function appendImagePage(pdf, imageData) {
+/* Todas as páginas do PDF único saem no mesmo tamanho A4. A orientação
+   (retrato ou paisagem) é definida pela primeira cifra do repertório. */
+const PDF_A4_SHORT = 595.28;
+const PDF_A4_LONG = 841.89;
+
+function pdfPageInfo(page) {
+  let box;
+  try { box = page.getCropBox(); } catch (err) { box = page.getMediaBox(); }
+  const angle = ((Number(page.getRotation().angle) || 0) % 360 + 360) % 360;
+  const swap = angle === 90 || angle === 270;
+  return {
+    angle,
+    width: swap ? box.height : box.width,
+    height: swap ? box.width : box.height,
+    cropWidth: box.width,
+    cropHeight: box.height,
+    box
+  };
+}
+
+function a4SizeFor(width, height) {
+  return width > height
+    ? { width: PDF_A4_LONG, height: PDF_A4_SHORT }
+    : { width: PDF_A4_SHORT, height: PDF_A4_LONG };
+}
+
+async function imagePixelSize(imageData) {
+  if (!window.createImageBitmap) return null;
+  const mime = imageData.kind === 'png' ? 'image/png' : 'image/jpeg';
+  const bitmap = await createImageBitmap(new Blob([imageData.bytes], { type: mime }));
+  try {
+    return { width: bitmap.width, height: bitmap.height };
+  } finally {
+    if (bitmap.close) bitmap.close();
+  }
+}
+
+async function targetPageSizeForItems(items, getSourceDoc) {
+  for (const item of items) {
+    if (item.kind !== 'pdf') continue;
+    try {
+      const source = await getSourceDoc(item);
+      const info = pdfPageInfo(source.getPage(0));
+      return a4SizeFor(info.width, info.height);
+    } catch (err) {
+      /* tenta o próximo item */
+    }
+  }
+  for (const item of items) {
+    if (item.kind !== 'image') continue;
+    try {
+      const size = await imagePixelSize(item.image);
+      if (size) return a4SizeFor(size.width, size.height);
+    } catch (err) {
+      /* usa retrato como padrão */
+    }
+    break;
+  }
+  return { width: PDF_A4_SHORT, height: PDF_A4_LONG };
+}
+
+/* Desenha cada página da cifra dentro de uma página A4, sem cortar e
+   preservando a proporção. A rotação original da página é aplicada aqui. */
+async function appendPdfPages(pdf, source, target) {
+  for (const sourcePage of source.getPages()) {
+    const info = pdfPageInfo(sourcePage);
+    const scale = Math.min(target.width / info.width, target.height / info.height);
+    const drawWidth = info.cropWidth * scale;
+    const drawHeight = info.cropHeight * scale;
+    const theta = -info.angle * Math.PI / 180;
+    const cos = Math.cos(theta);
+    const sin = Math.sin(theta);
+    const corners = [
+      [0, 0],
+      [drawWidth, 0],
+      [0, drawHeight],
+      [drawWidth, drawHeight]
+    ].map(([x, y]) => [x * cos - y * sin, x * sin + y * cos]);
+    const minX = Math.min(...corners.map((point) => point[0]));
+    const maxX = Math.max(...corners.map((point) => point[0]));
+    const minY = Math.min(...corners.map((point) => point[1]));
+    const maxY = Math.max(...corners.map((point) => point[1]));
+
+    const embedded = await pdf.embedPage(sourcePage, {
+      left: info.box.x,
+      bottom: info.box.y,
+      right: info.box.x + info.box.width,
+      top: info.box.y + info.box.height
+    });
+    const page = pdf.addPage([target.width, target.height]);
+    page.drawPage(embedded, {
+      x: (target.width - (maxX - minX)) / 2 - minX,
+      y: (target.height - (maxY - minY)) / 2 - minY,
+      width: drawWidth,
+      height: drawHeight,
+      rotate: PDFLib.degrees((360 - info.angle) % 360)
+    });
+  }
+}
+
+async function appendImagePage(pdf, imageData, target) {
   const image = imageData.kind === 'png'
     ? await pdf.embedPng(imageData.bytes)
     : await pdf.embedJpg(imageData.bytes);
   const { width, height } = image.scale(1);
-  const landscape = width > height;
-  const pageWidth = landscape ? 841.89 : 595.28;
-  const pageHeight = landscape ? 595.28 : 841.89;
-  const margin = 18;
-  const scale = Math.min((pageWidth - margin * 2) / width, (pageHeight - margin * 2) / height);
+  const scale = Math.min(target.width / width, target.height / height);
   const drawWidth = width * scale;
   const drawHeight = height * scale;
-  const page = pdf.addPage([pageWidth, pageHeight]);
+  const page = pdf.addPage([target.width, target.height]);
   page.drawImage(image, {
-    x: (pageWidth - drawWidth) / 2,
-    y: (pageHeight - drawHeight) / 2,
+    x: (target.width - drawWidth) / 2,
+    y: (target.height - drawHeight) / 2,
     width: drawWidth,
     height: drawHeight
   });
@@ -2555,17 +2652,30 @@ async function buildListPdf(list, onProgress) {
 
   if (!items.length) throw new Error('Nenhuma cifra em PDF ou imagem pôde ser usada.');
 
+  const sourceDocs = new Map();
+  const getSourceDoc = async (item) => {
+    if (!sourceDocs.has(item)) {
+      sourceDocs.set(item, await PDFLib.PDFDocument.load(item.bytes, { ignoreEncryption: true }));
+    }
+    return sourceDocs.get(item);
+  };
+  const target = await targetPageSizeForItems(items, getSourceDoc);
+
   const merged = await PDFLib.PDFDocument.create();
   let used = 0;
   for (let index = 0; index < items.length; index++) {
     const item = items[index];
     try {
       if (item.kind === 'pdf') {
-        const source = await PDFLib.PDFDocument.load(item.bytes, { ignoreEncryption: true });
-        const pages = await merged.copyPages(source, source.getPageIndices());
-        pages.forEach((page) => merged.addPage(page));
+        const source = await getSourceDoc(item);
+        try {
+          await appendPdfPages(merged, source, target);
+        } finally {
+          // Libera o PDF de origem assim que ele foi incorporado.
+          sourceDocs.delete(item);
+        }
       } else {
-        await appendImagePage(merged, item.image);
+        await appendImagePage(merged, item.image, target);
       }
       used++;
     } catch (err) {
@@ -2991,6 +3101,8 @@ function closeViewer() {
     !confirm('Descartar as anotações que ainda não foram salvas?')) return;
   stopAnnotating();
   viewerOpen = false;
+  pinchState = null;
+  swipeState = null;
   renderGeneration++;
   resetPdf();
   clearPreloadedQueue();
@@ -3318,22 +3430,30 @@ function releasePage(page) {
   addPageNumber(page, pageNumber);
 }
 
+function applyZoomLayout() {
+  if (!viewerOpen) return;
+  if (currentDoc) {
+    const width = pageWidth();
+    for (const page of pageElements) {
+      page.style.width = width + 'px';
+    }
+    return;
+  }
+  const body = $('#viewerBody');
+  const doc = body.querySelector('.doc');
+  if (doc) doc.style.fontSize = (16 * zoom) + 'px';
+  applyImageZoom();
+}
+
 function refreshZoom() {
   if (!viewerOpen) return;
   const body = $('#viewerBody');
   const rect = body.getBoundingClientRect();
-  const ratio = body.scrollHeight > body.clientHeight
-    ? body.scrollTop / (body.scrollHeight - body.clientHeight)
-    : 0;
+
+  applyZoomLayout();
 
   if (currentDoc) {
     const token = renderGeneration;
-    const width = pageWidth();
-
-    for (const page of pageElements) {
-      page.style.width = width + 'px';
-    }
-
     for (const page of pageElements) {
       const pageRect = page.getBoundingClientRect();
       const near = pageRect.bottom > rect.top - 800 && pageRect.top < rect.bottom + 800;
@@ -3344,10 +3464,6 @@ function refreshZoom() {
         renderPage(page, token, rendered);
       }
     }
-  } else {
-    const doc = body.querySelector('.doc');
-    if (doc) doc.style.fontSize = (16 * zoom) + 'px';
-    applyImageZoom();
   }
 
   for (const page of pageElements) {
@@ -3371,6 +3487,38 @@ function applyImageZoom() {
 function changeZoom(delta) {
   zoom = Math.max(0.5, Math.min(3, Math.round((zoom + delta) * 100) / 100));
   refreshZoom();
+}
+
+function touchDistance(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+
+function touchCenter(touches) {
+  return {
+    x: (touches[0].clientX + touches[1].clientX) / 2,
+    y: (touches[0].clientY + touches[1].clientY) / 2
+  };
+}
+
+/* Pinsa dentro do visualizador usando o zoom do próprio app, sem deixar o
+   navegador ampliar a página inteira (o que empurrava a barra de botões). */
+function updatePinchZoom(touches) {
+  if (!pinchState || touches.length !== 2) return;
+  const distance = touchDistance(touches);
+  const wanted = pinchState.startZoom * (distance / pinchState.startDistance);
+  const next = Math.max(0.5, Math.min(3, Math.round(wanted * 100) / 100));
+  if (next === zoom) return;
+  zoom = next;
+  applyZoomLayout();
+
+  const body = $('#viewerBody');
+  const ratio = next / pinchState.startZoom;
+  const left = (pinchState.startScrollLeft + pinchState.midX) * ratio - pinchState.midX;
+  const top = (pinchState.startScrollTop + pinchState.midY) * ratio - pinchState.midY;
+  body.scrollLeft = Math.max(0, Math.min(body.scrollWidth - body.clientWidth, left));
+  body.scrollTop = Math.max(0, Math.min(body.scrollHeight - body.clientHeight, top));
 }
 
 function updateAnnotateButton(song) {
@@ -4318,7 +4466,26 @@ function bindEvents() {
 
   const viewerBody = $('#viewerBody');
   viewerBody.addEventListener('touchstart', (event) => {
-    if (!viewerOpen || annotating || event.touches.length !== 1) {
+    if (!viewerOpen) {
+      swipeState = null;
+      pinchState = null;
+      return;
+    }
+    if (event.touches.length === 2 && !annotating) {
+      const rect = viewerBody.getBoundingClientRect();
+      const center = touchCenter(event.touches);
+      pinchState = {
+        startDistance: Math.max(1, touchDistance(event.touches)),
+        startZoom: zoom,
+        midX: center.x - rect.left,
+        midY: center.y - rect.top,
+        startScrollLeft: viewerBody.scrollLeft,
+        startScrollTop: viewerBody.scrollTop
+      };
+      swipeState = null;
+      return;
+    }
+    if (event.touches.length !== 1 || annotating) {
       swipeState = null;
       return;
     }
@@ -4326,7 +4493,23 @@ function bindEvents() {
     swipeState = { x: touch.clientX, y: touch.clientY, time: Date.now() };
   }, { passive: true });
 
+  viewerBody.addEventListener('touchmove', (event) => {
+    if (!pinchState || event.touches.length !== 2) return;
+    event.preventDefault();
+    updatePinchZoom(event.touches);
+  }, { passive: false });
+
   viewerBody.addEventListener('touchend', (event) => {
+    if (pinchState) {
+      if (event.touches.length < 2) {
+        pinchState = null;
+        swipeState = null;
+        // Só redesenha as páginas no zoom final; durante o gesto o canvas
+        // existente é só redimensionado, o que mantém a pinsa fluida.
+        refreshZoom();
+      }
+      return;
+    }
     const start = swipeState;
     swipeState = null;
     if (!start || !viewerOpen || annotating) return;
@@ -4344,7 +4527,18 @@ function bindEvents() {
     stepSong(dx < 0 ? 1 : -1);
   }, { passive: true });
 
-  viewerBody.addEventListener('touchcancel', () => { swipeState = null; }, { passive: true });
+  viewerBody.addEventListener('touchcancel', () => {
+    swipeState = null;
+    if (pinchState) {
+      pinchState = null;
+      refreshZoom();
+    }
+  }, { passive: true });
+
+  // Safari pode tratar a pinsa como gesto da página; bloqueia só no visualizador.
+  ['gesturestart', 'gesturechange', 'gestureend'].forEach((type) => {
+    $('#viewer').addEventListener(type, (event) => event.preventDefault(), { passive: false });
+  });
   $('#zoomOut').addEventListener('click', () => changeZoom(-0.15));
   $('#zoomIn').addEventListener('click', () => changeZoom(0.15));
   $('#invertBtn').addEventListener('click', () => {

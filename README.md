@@ -17,8 +17,8 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 - Etiquetas, favoritas e edição de nome/artista/tom.
 - Repertórios recolhíveis: toque no nome para expandir e ver todas as músicas.
 - Repertórios com adicionar, arrastar para reordenar, remover e tocar em sequência.
-- Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF e imagens, para baixar ou compartilhar.
-- Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música pelos botões ◀ ▶, setas do teclado e deslize horizontal. Ao abrir uma cifra de um repertório, as demais cifras daquele repertório são pré-carregadas em segundo plano.
+- Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF e imagens, para baixar ou compartilhar. O PDF único padroniza todas as páginas no mesmo tamanho A4 (retrato ou paisagem, conforme a primeira cifra).
+- Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música pelos botões ◀ ▶, setas do teclado e deslize horizontal. Ao abrir uma cifra de um repertório, as demais cifras daquele repertório são pré-carregadas em segundo plano. A pinsa de dois dedos usa o zoom do próprio app e mantém a barra de botões fixa no topo.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.
 - No visualizador, **↗ Abrir em outro app** tenta compartilhar o arquivo; se o Samsung Notes não aparecer no menu, use **📂 Localizar** para abrir pela pasta no Meus Arquivos. **⤓ Baixar** guarda uma cópia em Downloads.
 - Tema claro/escuro salvo.
@@ -100,9 +100,9 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 ## Limitações conhecidas
 
 - A pasta só pode ser mapeada em navegadores com a **File System Access API** (Chrome/Edge no Android, tablet e computador). Sem essa API, use **Importar arquivos / pasta** (cópia).
-- O navegador pode pedir para liberar o acesso à pasta de novo depois de fechar; toque em 📁 → **Reconectar**. Ao abrir uma cifra com o acesso pendente, o app também pede a liberação e relê os caminhos em segundo plano.
+- O navegador pode pedir para liberar o acesso à pasta de novo depois de fechar; toque em 📁 → **Reconectar**. Depois de reconectar, as cifras são abertas pelo caminho salvo; a lista inteira só é relida em **Atualizar lista**.
 - Cada arquivo importado tem limite de 100 MB. O zip e o PDF único do repertório são montados na memória do aparelho; repertórios muito grandes podem demorar ou falhar em tablets com pouca memória.
-- O PDF único inclui as cifras em PDF e imagens PNG/JPEG (WebP é convertido). DOC/DOCX ficam de fora e o app avisa quais são; use o zip para levá-las.
+- O PDF único inclui as cifras em PDF e imagens PNG/JPEG (WebP é convertido). Todas as páginas saem no mesmo tamanho A4; páginas com proporção diferente são reduzidas e centralizadas, sem corte. DOC/DOCX ficam de fora e o app avisa quais são; use o zip para levá-las.
 - Ao abrir o app por `http://IP:8000`, o service worker e a instalação como PWA não funcionam. Além disso, o IndexedDB é separado por endereço e porta: se o IP do computador mudar, o tablet enxerga outro site e a biblioteca parece vazia. Para uso real, use um endereço HTTPS fixo.
 - `.doc` antigo é listado e pode ser baixado, mas não abre no navegador. Converta para `.docx` ou PDF.
 - PDFs escritos à mão (Samsung Notes) e imagens não têm texto; a busca encontra só pelo nome.
@@ -132,14 +132,16 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 - Edição de metadados e reimportação com o mesmo nome, preservando nome, artista, tom e etiquetas.
 - Criação de repertório, adicionar, reordenar, tocar e excluir cifra com remoção do repertório.
 - Visualizador de PDF com renderização sob demanda (1 canvas visível de 40 páginas) e zoom.
+- Pinsa no visualizador: o zoom do app aumenta/diminui a cifra e a barra de botões permanece fixa, sem o zoom da página inteira.
 - Visualizador de DOCX e de imagens.
 - Exportação de repertório em zip, com dois arquivos na ordem correta (`01 - ...`, `02 - ...`), incluindo o caminho de "Compartilhar" com a tela de arquivo pronto.
 - PDF único do repertório: 4 páginas na ordem correta (3 de um PDF de 3 páginas + 1 de outro), com o texto preservado, uma imagem incluída e a cifra DOCX avisada e excluída.
+- PDF único com páginas de tamanhos diferentes (A4, Carta, quase quadrada e uma girada): todas saíram em A4 595,28 × 841,89, com o texto preservado e a página girada dentro dos limites.
 - Tema persistente após recarregar.
 - Migração do banco versão 1 para a versão atual.
 - Uso offline com o servidor desligado, abrindo o app e um PDF.
 
-Ainda falta o teste real no tablet e no iPhone, principalmente a escolha da pasta no navegador do tablet e a anotação com caneta/dedo na tela sensível.
+Ainda falta o teste real no tablet e no iPhone, principalmente a escolha da pasta no navegador do tablet, a anotação com caneta/dedo e a pinsa na tela sensível.
 
 ## Licenças de terceiros
 

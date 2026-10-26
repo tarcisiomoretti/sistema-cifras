@@ -1,7 +1,7 @@
 # Retomada — Sistema de Cifras
 
 > Documento rápido para retomar o trabalho depois de desligar a máquina.
-> Estado em 23/10/2026.
+> Estado em 26/10/2026.
 
 ## Onde está o projeto
 
@@ -39,6 +39,11 @@
 - **Repertórios recolhíveis e arrastáveis.** Clicar no cabeçalho expande e mostra todas
   as músicas. Em **Editar**, a linha inteira pode ser arrastada para reordenar (sem
   setinhas ou alça).
+- **Índice da pasta em cache.** A releitura automática ao abrir o app usa um índice
+  salvo na última vez em que **Atualizar lista** foi tocado. Assim o boot não varre a
+  pasta inteira de novo. Se você adicionar/mover arquivos, use **Atualizar lista**
+  para atualizar o índice. Ao reconectar a pasta depois de reiniciar, o app não
+  re-sincroniza a lista sozinho; as cifras são abertas pelo caminho salvo.
 - **Excluir com opção.** Para cifra da pasta, **Ocultar da biblioteca** mantém o arquivo;
   **Apagar da pasta** remove o arquivo definitivamente, com confirmação.
 - **Caminhos após reinstalar.** Se o backup guardou `Antiga/Cifra.pdf` e o arquivo agora
@@ -54,14 +59,22 @@
   etiquetas, favoritas e repertórios.
 - Importação manual continua disponível (PDF, DOC, DOCX, PNG, JPG). Com pasta conectada
   ela grava o original na pasta; sem pasta, mantém a cópia no armazenamento interno.
-- O `sw.js` foi para **`cifras-v14`**.
+- O `sw.js` foi para **`cifras-v17`**.
 - **Troca de cifra no visualizador.** Os botões ◀ ▶, as setas do teclado e o deslize
   horizontal funcionam. Ao abrir uma cifra de um repertório, o app pré-carrega em
   segundo plano as demais cifras **daquele repertório**, começando pelas mais
   próximas e espaçando o trabalho para não atrasar a primeira página. Ao abrir pela
   biblioteca, nada é pré-carregado. O cache é liberado ao fechar o visualizador.
-- O **PDF único** do repertório agora inclui PDFs e imagens PNG/JPEG, nesta ordem.
-  WebP é convertido para PNG; DOC/DOCX ficam de fora com aviso.
+- **Zoom por pinsa sem perder os botões.** A pinsa na tela usa o zoom do próprio app
+  dentro do visualizador; o navegador não amplia a página inteira, então a barra com
+  fechar, anterior/próxima e os demais botões continua fixa no topo. O gesto de dois
+  dedos ajusta o zoom mantendo o ponto tocado como referência. Fora do visualizador,
+  a pinsa normal do navegador continua valendo.
+- O **PDF único** do repertório agora usa **sempre o mesmo tamanho A4** em todas as
+  páginas, inclusive imagens. A orientação (retrato ou paisagem) é definida pela
+  primeira cifra; as demais são reduzidas/proporcionais para caber sem corte. Assim
+  o leitor não fica alternando o tamanho de uma cifra para outra. PDFs e imagens
+  entram nesta ordem; WebP é convertido para PNG; DOC/DOCX ficam de fora com aviso.
 - A pasta pede permissão de **leitura e escrita** porque grava o backup do banco,
   recebe arquivos importados e salva anotações feitas nos PDFs. Fora essas ações
   explícitas, o app não altera nem apaga as cifras.
@@ -92,6 +105,12 @@
     arrastar a linha da música para conferir a nova ordem.
 14. Abrir **📂 Localizar** e testar **Copiar caminho**; abrir o arquivo pelo Meus Arquivos
     com o Samsung Notes.
+15. Em um repertório, abrir uma cifra e dar zoom com dois dedos (pinsa). Confirmar que
+    a barra de botões continua visível e que a cifra aumenta/diminui sem a página
+    inteira ser ampliada. Testar também os botões **−** e **+**.
+16. Exportar um repertório com PDFs de tamanhos diferentes (A4, Carta e uma página
+    girada) em **PDF único** e conferir se todas as páginas saem no mesmo tamanho A4,
+    sem conteúdo cortado.
 
 ## Pendências conhecidas / decisões em aberto
 
@@ -117,7 +136,7 @@
 ## Fluxo de publicação (lembrete)
 
 1. Alterar os arquivos.
-2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v14`).
+2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v17`).
 3. `git commit` + `git push origin main`.
 4. O GitHub Pages publica sozinho em ~1 minuto.
 
