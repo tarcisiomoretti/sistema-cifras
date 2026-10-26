@@ -69,6 +69,13 @@ let importing = false;
 let exporting = false;
 let currentBlob = null;
 let currentBlobSongId = null;
+let mediaRecorder = null;
+let audioChunks = [];
+let audioStream = null;
+let recStartTime = 0;
+let recTimerInterval = 0;
+let lastRecordingBlob = null;
+let lastRecordingName = null;
 let currentObjectUrl = null; // imagem aberta no visualizador
 let pendingExport = null; // { kind, filename, blob } pronto para compartilhar/baixar
 
@@ -1348,6 +1355,192 @@ async function removeFileByPath(path) {
     folder = await folder.getDirectoryHandle(parts[index]);
   }
   await folder.removeEntry(parts[parts.length - 1]);
+}
+
+/* ---------- Gravação de áudio (ensaio) ---------- */
+function isRecordingSupported() {
+  return typeof navigator !== 'undefined' &&
+    typeof navigator.mediaDevices !== 'undefined' &&
+    typeof navigator.mediaDevices.getUserMedia === 'function' &&
+    typeof window.MediaRecorder !== 'undefined';
+}
+
+function formatRecTime(ms) {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return minutes + ':' + seconds;
+}
+
+function updateRecTimer() {
+  const timerEl = $('#recTimer');
+  if (!timerEl) return;
+  if (!recStartTime) {
+    timerEl.textContent = '00:00';
+    return;
+  }
+  timerEl.textContent = formatRecTime(Date.now() - recStartTime);
+}
+
+function stopRecTimer() {
+  if (recTimerInterval) {
+    clearInterval(recTimerInterval);
+    recTimerInterval = 0;
+  }
+  recStartTime = 0;
+  updateRecTimer();
+}
+
+function updateRecUI(recording) {
+  const btn = $('#recBtn');
+  const timerEl = $('#recTimer');
+  if (!btn) return;
+  if (recording) {
+    btn.classList.add('recording');
+    btn.innerHTML = '■ <span class="label">PARAR</span>';
+    btn.title = 'Parar gravação';
+    btn.setAttribute('aria-label', 'Parar gravação');
+    if (timerEl) {
+      timerEl.hidden = false;
+      updateRecTimer();
+    }
+  } else {
+    btn.classList.remove('recording');
+    btn.innerHTML = '● <span class="label">REC</span>';
+    btn.title = 'Gravar áudio deste ensaio';
+    btn.setAttribute('aria-label', 'Gravar áudio');
+    if (timerEl) {
+      timerEl.hidden = true;
+    }
+    stopRecTimer();
+  }
+}
+
+function getRecMimeType() {
+  if (!window.MediaRecorder) return '';
+  const candidates = [
+    'audio/webm;codecs=opus',
+    'audio/webm',
+    'audio/ogg;codecs=opus',
+    'audio/ogg'
+  ];
+  for (const type of candidates) {
+    try {
+      if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) return type;
+    } catch (err) { /* ignore */ }
+  }
+  return '';
+}
+
+async function saveRecordingToFolder(blob, filename) {
+  if (!dirHandle) return false;
+  try {
+    const recDir = await dirHandle.getDirectoryHandle('Gravacoes', { create: true });
+    const fileHandle = await recDir.getFileHandle(filename, { create: true });
+    const writable = await fileHandle.createWritable();
+    await writable.write(blob);
+    await writable.close();
+    return true;
+  } catch (err) {
+    console.error('Falha ao salvar gravação em Gravacoes/', err);
+    return false;
+  }
+}
+
+async function shareRecording(blob, filename) {
+  try {
+    const type = blob.type || 'audio/webm';
+    const file = new File([blob], filename, { type });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: filename.replace(/\.[^.]+$/, ''),
+        text: 'Gravação do ensaio'
+      });
+      return true;
+    }
+  } catch (err) {
+    if (err && err.name === 'AbortError') return false;
+    console.warn('Não foi possível compartilhar a gravação', err);
+  }
+  return false;
+}
+
+async function startRecording() {
+  if (!isRecordingSupported()) {
+    toast('Gravação não suportada neste navegador.', 'error');
+    return;
+  }
+  if (mediaRecorder && mediaRecorder.state === 'recording') return;
+  try {
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = getRecMimeType();
+    const options = mimeType ? { mimeType } : {};
+    mediaRecorder = new MediaRecorder(audioStream, options);
+    audioChunks = [];
+    mediaRecorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) audioChunks.push(event.data);
+    };
+    mediaRecorder.onstop = async () => {
+      try {
+        const type = mediaRecorder && mediaRecorder.mimeType ? mediaRecorder.mimeType : (getRecMimeType() || 'audio/webm');
+        const blob = new Blob(audioChunks, { type });
+        audioChunks = [];
+        lastRecordingBlob = blob;
+        const song = currentSong();
+        const base = song ? (song.name || song.file || 'gravacao') : 'gravacao';
+        const ext = type.includes('ogg') ? 'ogg' : 'webm';
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', ' ').slice(0, 19);
+        const filename = sanitizeFileName(base) + ' - ' + stamp + '.' + ext;
+        lastRecordingName = filename;
+        let savedToFolder = false;
+        if (dirHandle) {
+          savedToFolder = await saveRecordingToFolder(blob, filename);
+        }
+        if (savedToFolder) {
+          toast('Gravação salva em Gravacoes/');
+        } else {
+          downloadBlob(blob, filename);
+          toast('Gravação baixada.');
+        }
+        const shared = await shareRecording(blob, filename);
+        if (shared) return;
+      } catch (err) {
+        console.error('Falha ao finalizar gravação', err);
+        toast('Não foi possível salvar a gravação.', 'error');
+      } finally {
+        if (audioStream) {
+          try { audioStream.getTracks().forEach((track) => track.stop()); } catch (ignore) { /* ignore */ }
+          audioStream = null;
+        }
+        mediaRecorder = null;
+        updateRecUI(false);
+      }
+    };
+    mediaRecorder.start();
+    recStartTime = Date.now();
+    if (recTimerInterval) clearInterval(recTimerInterval);
+    recTimerInterval = setInterval(updateRecTimer, 1000);
+    updateRecTimer();
+    updateRecUI(true);
+  } catch (err) {
+    console.error('Não foi possível iniciar gravação', err);
+    if (err && err.name === 'NotAllowedError') {
+      toast('Permissão do microfone negada. Verifique as configurações do navegador.', 'error');
+    } else {
+      toast('Não foi possível acessar o microfone.', 'error');
+    }
+    if (audioStream) {
+      try { audioStream.getTracks().forEach((track) => track.stop()); } catch (ignore) { /* ignore */ }
+      audioStream = null;
+    }
+  }
+}
+
+function stopRecording() {
+  if (mediaRecorder && mediaRecorder.state === 'recording') {
+    try { mediaRecorder.stop(); } catch (err) { /* ignore */ }
+  }
 }
 
 async function readFileFromFolder(filename) {
@@ -4554,6 +4747,25 @@ function bindEvents() {
   });
   $('#downloadBtn').addEventListener('click', downloadCurrent);
   $('#shareBtn').addEventListener('click', shareCurrent);
+  const recBtnEl = $('#recBtn');
+  if (recBtnEl) {
+    if (!isRecordingSupported()) {
+      recBtnEl.disabled = true;
+      recBtnEl.title = 'Gravação não suportada neste navegador';
+    }
+    recBtnEl.addEventListener('click', () => {
+      if (!viewerOpen) return;
+      if (mediaRecorder && mediaRecorder.state === 'recording') {
+        stopRecording();
+        return;
+      }
+      if (!currentSong()) {
+        toast('Abra uma cifra para gravar o ensaio.', 'error');
+        return;
+      }
+      startRecording();
+    });
+  }
   const locateBtn = $('#locateBtn');
   if (locateBtn) locateBtn.addEventListener('click', openLocateModal);
   const restorePdfBtn = $('#restorePdfBtn');
