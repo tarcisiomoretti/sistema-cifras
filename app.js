@@ -4493,6 +4493,13 @@ function bindEvents() {
     swipeState = { x: touch.clientX, y: touch.clientY, time: Date.now() };
   }, { passive: true });
 
+  // Fallback para navegadores que ignoram touch-action na pinsa: bloqueia o
+  // zoom da página inteira enquanto o visualizador está aberto, inclusive se
+  // os dois dedos começarem em cima da barra de botões.
+  $('#viewer').addEventListener('touchmove', (event) => {
+    if (viewerOpen && event.touches.length > 1) event.preventDefault();
+  }, { passive: false });
+
   viewerBody.addEventListener('touchmove', (event) => {
     if (!pinchState || event.touches.length !== 2) return;
     event.preventDefault();

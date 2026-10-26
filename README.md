@@ -18,7 +18,7 @@ Esta é a versão corrigida do protótipo descrito em `Sistema de Cifras o que f
 - Repertórios recolhíveis: toque no nome para expandir e ver todas as músicas.
 - Repertórios com adicionar, arrastar para reordenar, remover e tocar em sequência.
 - Exportar um repertório em `.zip` (arquivos originais) ou em um **PDF único** com as cifras em PDF e imagens, para baixar ou compartilhar. O PDF único padroniza todas as páginas no mesmo tamanho A4 (retrato ou paisagem, conforme a primeira cifra).
-- Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música pelos botões ◀ ▶, setas do teclado e deslize horizontal. Ao abrir uma cifra de um repertório, as demais cifras daquele repertório são pré-carregadas em segundo plano. A pinsa de dois dedos usa o zoom do próprio app e mantém a barra de botões fixa no topo.
+- Modo palco com PDF renderizado sob demanda, imagens, zoom, fundo invertido, troca de música pelos botões ◀ ▶, setas do teclado e deslize horizontal. Ao abrir uma cifra de um repertório, as demais cifras daquele repertório são pré-carregadas em segundo plano. A pinsa de dois dedos usa o zoom do próprio app e mantém a barra de botões fixa no topo; o zoom de página do navegador fica desativado.
 - Download do arquivo original e compartilhamento pelo menu do aparelho.
 - No visualizador, **↗ Abrir em outro app** tenta compartilhar o arquivo; se o Samsung Notes não aparecer no menu, use **📂 Localizar** para abrir pela pasta no Meus Arquivos. **⤓ Baixar** guarda uma cópia em Downloads.
 - Tema claro/escuro salvo.
@@ -105,6 +105,7 @@ Os campos `source`, `folderPath`, `missing` e `hash` identificam a origem e o es
 - O PDF único inclui as cifras em PDF e imagens PNG/JPEG (WebP é convertido). Todas as páginas saem no mesmo tamanho A4; páginas com proporção diferente são reduzidas e centralizadas, sem corte. DOC/DOCX ficam de fora e o app avisa quais são; use o zip para levá-las.
 - Ao abrir o app por `http://IP:8000`, o service worker e a instalação como PWA não funcionam. Além disso, o IndexedDB é separado por endereço e porta: se o IP do computador mudar, o tablet enxerga outro site e a biblioteca parece vazia. Para uso real, use um endereço HTTPS fixo.
 - `.doc` antigo é listado e pode ser baixado, mas não abre no navegador. Converta para `.docx` ou PDF.
+- O zoom de página do navegador fica desativado para a barra do visualizador não sair do lugar. Use a pinsa de dois dedos ou os botões **−** e **+** dentro do visualizador.
 - PDFs escritos à mão (Samsung Notes) e imagens não têm texto; a busca encontra só pelo nome.
 - A anotação grava no **próprio PDF original**, como pedido. Se quiser guardar uma versão sem anotações, mantenha uma cópia do arquivo antes de salvar. Depois de salva, a anotação vira parte do PDF e não pode ser apagada separadamente pela borracha em outra sessão. O botão **↺ Remover anotações** restaura a cópia limpa guardada antes da primeira anotação feita por esta versão; PDFs anotados por versões anteriores não têm essa cópia.
 - O navegador não consegue iniciar o Samsung Notes apontando direto para um arquivo da pasta. Use **📂 Localizar** para copiar o caminho e abrir pelo Meus Arquivos, **↗ Abrir em outro app** (compartilhamento) ou **⤓ Baixar**; o Samsung Notes importa o PDF a partir daí.

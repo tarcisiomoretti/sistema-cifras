@@ -45,7 +45,7 @@ A versão corrigida está nesta pasta, separada em arquivos (`index.html`, `styl
 
 ### Visualizador (modo palco)
 
-- Tela cheia, com **zoom** (− e +), pinsa de dois dedos e rolagem. A pinsa usa o zoom do app e mantém a barra de botões fixa no topo.
+- Tela cheia, com **zoom** (− e +), pinsa de dois dedos e rolagem. A pinsa usa o zoom do app e mantém a barra de botões fixa no topo; o zoom de página do navegador fica desativado.
 - Botões ◀ ▶ para trocar de música (e setas do teclado). Dentro de um repertório, seguem a ordem dele.
 - Botão ◐ para inverter as cores (fundo escuro).
 - **✎ Abrir:** baixa o arquivo original (PDF ou DOCX) para editar no Word, no Samsung Notes ou em outro app.

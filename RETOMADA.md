@@ -59,7 +59,7 @@
   etiquetas, favoritas e repertórios.
 - Importação manual continua disponível (PDF, DOC, DOCX, PNG, JPG). Com pasta conectada
   ela grava o original na pasta; sem pasta, mantém a cópia no armazenamento interno.
-- O `sw.js` foi para **`cifras-v17`**.
+- O `sw.js` foi para **`cifras-v18`**.
 - **Troca de cifra no visualizador.** Os botões ◀ ▶, as setas do teclado e o deslize
   horizontal funcionam. Ao abrir uma cifra de um repertório, o app pré-carrega em
   segundo plano as demais cifras **daquele repertório**, começando pelas mais
@@ -68,8 +68,9 @@
 - **Zoom por pinsa sem perder os botões.** A pinsa na tela usa o zoom do próprio app
   dentro do visualizador; o navegador não amplia a página inteira, então a barra com
   fechar, anterior/próxima e os demais botões continua fixa no topo. O gesto de dois
-  dedos ajusta o zoom mantendo o ponto tocado como referência. Fora do visualizador,
-  a pinsa normal do navegador continua valendo.
+  dedos ajusta o zoom mantendo o ponto tocado como referência. O zoom de página do
+  navegador fica desativado para não deslocar a barra; use a pinsa ou os botões
+  **−** e **+** para ampliar a cifra.
 - O **PDF único** do repertório agora usa **sempre o mesmo tamanho A4** em todas as
   páginas, inclusive imagens. A orientação (retrato ou paisagem) é definida pela
   primeira cifra; as demais são reduzidas/proporcionais para caber sem corte. Assim
@@ -136,7 +137,7 @@
 ## Fluxo de publicação (lembrete)
 
 1. Alterar os arquivos.
-2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v17`).
+2. **Subir `CACHE_VERSION` em `sw.js`** a cada publicação (está em `cifras-v18`).
 3. `git commit` + `git push origin main`.
 4. O GitHub Pages publica sozinho em ~1 minuto.
 
