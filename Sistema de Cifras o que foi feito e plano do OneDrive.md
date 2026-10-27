@@ -12,7 +12,7 @@ Projeto de biblioteca de cifras para igreja, com cópia local em cada aparelho, 
 - Acessar o mesmo acervo no iPhone.
 - Manter o OneDrive como fonte da verdade e backup.
 - Pesquisar rápido e organizar melhor.
-https://tarcisiomoretti.github.io/sistema-cifras/
+
 **Decisões tomadas na conversa:**
 
 - Os arquivos continuam como são hoje: **PDF e .doc/.docx**. Nada será convertido para outro formato.
@@ -36,16 +36,16 @@ A versão corrigida está nesta pasta, separada em arquivos (`index.html`, `styl
 ### Repertórios
 
 - Criar listas por culto e dar nome a elas.
-- Cada repertório mostra suas músicas direto na lista. **Tocar numa cifra abre ela na hora.**
+- Cada repertório aparece recolhido; ao tocar no nome, mostra todas as suas músicas. **Tocar numa cifra abre ela na hora.**
 - O botão **▶ Tocar** abre o repertório inteiro em sequência.
-- O botão **Editar** do repertório permite adicionar, reordenar (↑ ↓) e remover músicas.
+- O botão **Editar** do repertório permite adicionar, reordenar (arrastando pelo ícone ⠿) e remover músicas.
 - Para adicionar, há um campo de busca com **filtro ao digitar**: aparecem as músicas que combinam, com o tom e um botão ＋.
 - O botão **⤓ Exportar** monta um `.zip` com os arquivos originais na ordem do repertório (`01 - Nome.pdf`), para baixar ou compartilhar.
-- O mesmo botão oferece o **PDF único**: junta as cifras em PDF num só arquivo, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular. As cifras DOCX/DOC ficam de fora, com aviso.
+- O mesmo botão oferece o **PDF único**: junta as cifras em PDF e as imagens (PNG/JPEG; WebP é convertido) num só arquivo, na ordem do repertório, bom para ler, imprimir ou enviar pelo celular. Todas as páginas saem no mesmo tamanho A4. As cifras DOCX/DOC ficam de fora, com aviso.
 
 ### Visualizador (modo palco)
 
-- Tela cheia, com **zoom** (− e +) e rolagem.
+- Tela cheia, com **zoom** (− e +), pinsa de dois dedos e rolagem. A pinsa usa o zoom do app e mantém a barra de botões fixa no topo; o zoom de página do navegador fica desativado.
 - Botões ◀ ▶ para trocar de música (e setas do teclado). Dentro de um repertório, seguem a ordem dele.
 - Botão ◐ para inverter as cores (fundo escuro).
 - **✎ Abrir:** baixa o arquivo original (PDF ou DOCX) para editar no Word, no Samsung Notes ou em outro app.
@@ -192,7 +192,7 @@ vendor/                  pdf.js 3.11.174 + mammoth 1.6.0 + JSZip 3.10.1 + pdf-li
 
 - **Download independente do artifact:** `✎ Abrir` usa um download comum do navegador, com `Blob` e `<a download>`, e `⤴ Compartilhar` usa `navigator.share` com o arquivo anexado, caindo para download quando não houver compartilhamento.
 - **Offline de verdade:** pdf.js, mammoth, JSZip e pdf-lib agora são locais (`vendor/`) e entram no cache do service worker. O app abre, lê PDFs/DOCX e monta o zip e o PDF único sem internet depois da primeira visita.
-- **Exportação de repertório:** o botão ⤓ Exportar monta um `.zip` com os arquivos originais, na ordem do repertório e sem recompressão, e também um **PDF único** juntando as cifras em PDF com pdf-lib (as páginas são copiadas como estão, preservando inclusive cifras escritas à mão). Ambos com opção de baixar ou compartilhar.
+- **Exportação de repertório:** o botão ⤓ Exportar monta um `.zip` com os arquivos originais, na ordem do repertório e sem recompressão, e também um **PDF único** juntando as cifras em PDF e as imagens com pdf-lib. Todas as páginas são ajustadas para o mesmo tamanho A4, sem corte, preservando o conteúdo (inclusive cifras escritas à mão); imagens também viram páginas A4. Ambos com opção de baixar ou compartilhar.
 - **Importação mais segura:** limite de 100 MB por arquivo, progresso por página na leitura de PDFs, aviso de arquivo grande e trava para não importar duas vezes ao mesmo tempo.
 - **Visualizador sem canvas duplicado:** cada página só é desenhada uma vez por vez, e páginas que saíram da tela são liberadas mesmo durante o zoom.
 - **PDFs grandes sem travar:** o visualizador cria as páginas sob demanda e libera as que saem da tela. Também limita a resolução do canvas, cancela desenhos antigos ao trocar de música/zoom e destrói o documento ao fechar.
@@ -243,12 +243,12 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
 #### Opção B: um único PDF com todas as cifras
 
 - Junta as cifras **na ordem do repertório** em um só arquivo PDF, bom para ler, imprimir ou mandar pelo celular.
-- Para PDFs, as páginas são copiadas como estão, com uma biblioteca de PDF (pdf-lib). Isso mantém o texto e também as **cifras escritas à mão** do Samsung Notes, sem perda de qualidade.
+- Para PDFs, as páginas são incorporadas com uma biblioteca de PDF (pdf-lib) e ajustadas para o mesmo tamanho A4, sem corte. Isso mantém o texto e também as **cifras escritas à mão** do Samsung Notes, sem perda de qualidade.
 - **O ponto delicado são os arquivos DOCX e .doc**, que não podem ser juntados diretamente a um PDF. Há três caminhos:
   1. Avisar quais cifras ficaram de fora e deixar a escolha ao usuário.
   2. Converter no navegador, desenhando o DOCX como página. Funciona, mas o alinhamento dos acordes sobre a letra pode mudar.
   3. Usar a **conversão para PDF do próprio OneDrive**, que respeita melhor a formatação do Word. Precisa de internet e da conexão da etapa 2 (a confirmar com um arquivo seu).
-- **Implementado com o caminho 1:** o PDF único inclui somente as cifras em PDF e avisa quais DOCX/DOC ficaram de fora, sugerindo o zip. Quem quiser garantir o resultado pode guardar as cifras do repertório em PDF. O caminho 3 fica para depois do OneDrive.
+- **Implementado com o caminho 1:** o PDF único inclui as cifras em PDF e as imagens, e avisa quais DOCX/DOC ficaram de fora, sugerindo o zip. Quem quiser garantir o resultado pode guardar as cifras do repertório em PDF ou imagem. O caminho 3 fica para depois do OneDrive.
 - Acabamentos possíveis, a decidir: uma **capa ou índice** com o nome do repertório e a lista das músicas com o número da página; **marcadores** no PDF para pular entre as músicas; e um nome de arquivo automático, como `Repertório - Culto domingo.pdf`.
 
 #### Compartilhar ou baixar
@@ -260,7 +260,7 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
 
 - **Memória e tempo:** repertórios com muitas cifras ou PDFs grandes podem demorar no tablet e no iPhone. O app deve mostrar o andamento (por exemplo, “montando 5 de 12”) e não travar a tela.
 - **Tamanho do arquivo:** alguns apps de mensagem limitam o tamanho de anexos. Se o zip ou o PDF ficar grande, vale avisar o tamanho antes de enviar.
-- **Fidelidade:** o zip nunca altera os arquivos. O PDF único preserva PDFs fielmente, mas pode alterar DOCX se for convertido no navegador.
+- **Fidelidade:** o zip nunca altera os arquivos. O PDF único preserva o conteúdo dos PDFs, mas padroniza todas as páginas em A4; imagens também viram páginas A4. Pode alterar DOCX se for convertido no navegador.
 - **Privacidade:** tudo é montado no aparelho. Os arquivos só saem dele quando você compartilha ou baixa.
 
 ### 10.4 Onde isso entra na ordem de trabalho
@@ -268,7 +268,7 @@ No cartão de cada repertório entra um botão **Exportar**, com duas opções d
 A exportação trabalha com os arquivos que já estão no aparelho, então **não depende do OneDrive** e pode ser feita logo depois do teste do protótipo (seção 4). O **zip do repertório e o PDF único já estão implementados**; falta apenas, mais adiante, a conversão de DOCX para PDF pelo OneDrive. Ordem sugerida:
 
 1. **Zip do repertório**, com compartilhar e baixar. É a parte mais simples e a que menos muda os arquivos. *(feito)*
-2. **PDF único** com cifras em PDF, com aviso sobre as que são DOCX. *(feito)*
+2. **PDF único** com cifras em PDF e imagens, com aviso sobre as que são DOCX/DOC. *(feito)*
 3. **Conversão de DOCX para PDF** pelo OneDrive, depois que a etapa 2 estiver pronta.
 4. **Origem das cifras** (manual, OneDrive ou ambas), junto da conexão com o OneDrive.
 
@@ -537,15 +537,26 @@ Para o tamanho da banda, a primeira opção tende a bastar. Fica registrado como
 - Botão **☁ Nuvem** no cabeçalho. Sem o App key configurado, ele mostra as instruções em vez de quebrar.
 - **Entrar/Sair** com PKCE, sem segredo de cliente. O `?code=` é retirado da barra de endereço assim que o login termina.
 - **Escolher pasta** listando as pastas do Dropbox (a pasta escolhida fica só no aparelho).
-- **Sincronizar agora**, manual: baixa os arquivos novos ou alterados (comparando a revisão), envia o que foi importado no aparelho e troca o `_cifras-meta.json`.
+- **Sincronizar agora**, manual, em duas etapas:
+  1. **Lista tudo, sem baixar**: lê o `_cifras-meta.json` (etiquetas, favoritas e repertórios) e cria a ficha de cada cifra da pasta na biblioteca, marcando cada uma como **neste aparelho** ou **só na nuvem**. Também envia para a nuvem o que foi importado no aparelho.
+  2. **Pergunta o que fazer** quando há cifras só na nuvem: *baixar todas agora* ou *só listar, baixo depois*.
+- Cada cifra na biblioteca mostra um **☁** e a marca **nuvem** no subtítulo quando o arquivo não está no aparelho, com duas ações:
+  - **⤓ Manter neste aparelho** — baixa só aquela cifra.
+  - **⤒ Liberar espaço** — apaga o arquivo local e mantém a ficha e a cópia na nuvem.
+- **Abrir uma cifra que só está na nuvem baixa na hora e abre**; ela fica guardada para as próximas vezes.
+- **Exportar** (zip e PDF único) também baixa da nuvem o que faltar, em vez de deixar de fora.
+- **Guardar numa pasta do aparelho (cartão SD)**: quando o navegador permite escolher uma pasta (`showDirectoryPicker`), o app passa a gravar e ler os arquivos **direto nessa pasta**, sem ocupar o armazenamento interno. A escolha fica na tela de nuvem; o handle é tentado no IndexedDB e a permissão é pedida de novo quando o navegador não a mantém (caso do Android).
 - O token de atualização fica no `sessionStorage`: sobrevive a recarregamentos na mesma aba e desaparece ao fechar o navegador, exigindo novo login — comportamento conservador e seguro.
 
 > Observação de segurança: hoje o token de atualização é mantido na sessão da aba. Isso é intencional nesta primeira versão; se o login frequente incomodar no tablet, dá para passar a guardá-lo de forma persistente mais adiante, com a devida avaliação de risco.
 
+> Sobre a pasta do aparelho: a `showDirectoryPicker` só passou a existir no Chrome para **Android 132+** (janeiro de 2025) e a permissão **não é persistente** no Android — o app pede a pasta de novo quando o navegador não a lembra. Quando não há suporte, o app avisa e segue usando o armazenamento interno.
+
 ### 12.10 Decisões em aberto
 
 - Todos na mesma conta ou cada um com a própria? *(propenso a: mesma conta, login manual em cada aparelho)*
-- Baixar a pasta inteira ou só o que for aberto/marcado como offline?
 - Ao apagar uma cifra no app, manter o arquivo na nuvem e criar só a lápide nos metadados?
 - Se o arquivo sumir da nuvem, remover da biblioteca ou marcar como “arquivo ausente”?
 - Sincronizar só no botão (decidido) — vale também um lembrete automático se houver pendências ao abrir?
+
+*(Resolvido em 22/10: baixar a pasta inteira ou só o que for aberto → **perguntar sempre**, com a opção de baixar todas ou só listar. Onde guardar → **interno até o usuário escolher uma pasta do aparelho**.)*
